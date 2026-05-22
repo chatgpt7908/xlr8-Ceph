@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ceph BlueStore Internals</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0d1117; color: #e6edf3; padding: 24px; line-height: 1.5;
+  }
+  .app { max-width: 1300px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; color: #58a6ff; }
+  .subtitle { color: #8b949e; font-size: 14px; margin-bottom: 24px; }
+
+  .panel {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 18px; margin-bottom: 16px;
+  }
+  .panel-title {
+    font-size: 12px; color: #58a6ff; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 600; margin-bottom: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .hint { font-size: 11px; color: #8b949e; font-weight: normal; text-transform: none; }
+
+  /* Top controls */
+  .controls {
+    display: flex; gap: 10px; align-items: end; flex-wrap: wrap;
+  }
+  .input-group label {
+    display: block; font-size: 11px; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
+  }
+  .input-group input, .input-group select {
+    background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+    padding: 8px 10px; border-radius: 6px; font-size: 13px;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+
+  button {
+    background: #238636; color: white; border: none; padding: 9px 16px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+  }
+  button:hover { background: #2ea043; }
+  button.secondary {
+    background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+    font-weight: 500; padding: 7px 12px; font-size: 12px;
+  }
+  button.secondary:hover { background: #30363d; }
+  button.toggle.active { background: #1f6feb; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Deployment toggle */
+  .deployment-toggle {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    margin-bottom: 12px;
+  }
+  .deploy-option {
+    background: #0d1117; border: 2px solid #30363d; border-radius: 8px;
+    padding: 12px; cursor: pointer; transition: all 0.2s;
+  }
+  .deploy-option:hover { border-color: #58a6ff; }
+  .deploy-option.active {
+    border-color: #f1c40f; background: #1f1a07;
+    box-shadow: 0 0 14px rgba(241, 196, 15, 0.2);
+  }
+  .deploy-name { font-weight: 700; font-size: 13px; color: #c9d1d9; }
+  .deploy-desc { font-size: 11px; color: #8b949e; margin-top: 4px; }
+  .deploy-icons { font-size: 18px; margin-top: 4px; }
+
+  /* OSD process diagram */
+  .osd-container {
+    background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+    padding: 18px; position: relative;
+    min-height: 360px;
+  }
+  .osd-label {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12px; color: #58a6ff; font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  /* BlueStore components */
+  .components {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;
+    margin-bottom: 18px;
+  }
+  .component {
+    background: #161b22; border: 2px solid #30363d; border-radius: 8px;
+    padding: 12px; transition: all 0.4s; position: relative;
+  }
+  .component.active {
+    border-color: #f1c40f;
+    box-shadow: 0 0 18px rgba(241, 196, 15, 0.3);
+    transform: translateY(-2px);
+  }
+  .component-name {
+    font-weight: 700; color: #c9d1d9; font-size: 13px;
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px;
+  }
+  .component-name .badge {
+    font-size: 9px; padding: 1px 6px; border-radius: 8px;
+    font-family: 'SF Mono', Consolas, monospace; font-weight: 600;
+  }
+  .badge.atom { background: #1a2e1a; color: #7ee787; }
+  .badge.cons { background: #0a1e3d; color: #58a6ff; }
+  .badge.isol { background: #1f1428; color: #d2a8ff; }
+  .component-purpose {
+    font-size: 11px; color: #8b949e; margin-bottom: 8px;
+  }
+  .component-state {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
+    padding: 6px 8px; font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px; min-height: 38px; color: #c9d1d9;
+  }
+  .component-state .key { color: #d2a8ff; }
+  .component-state .val { color: #7ee787; }
+  .component-state .addr { color: #f1c40f; }
+
+  /* Devices */
+  .devices {
+    display: grid; gap: 10px;
+  }
+  .device {
+    background: #161b22; border: 2px solid #30363d; border-radius: 8px;
+    padding: 12px; transition: all 0.3s; position: relative;
+  }
+  .device.active {
+    border-color: #58a6ff; box-shadow: 0 0 14px rgba(88, 166, 255, 0.3);
+  }
+  .device-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px;
+  }
+  .device-name {
+    font-family: 'SF Mono', Consolas, monospace; font-weight: 700;
+    font-size: 13px; color: #c9d1d9;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .device-type {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    font-family: 'SF Mono', Consolas, monospace; font-weight: 600;
+  }
+  .device-type.nvme { background: #1f1428; color: #d2a8ff; }
+  .device-type.ssd { background: #0a1e3d; color: #58a6ff; }
+  .device-type.hdd { background: #2d2a07; color: #f1c40f; }
+  .device-perf {
+    font-size: 10px; color: #8b949e;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+
+  .device-content {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
+    padding: 8px; font-family: 'SF Mono', Consolas, monospace;
+    font-size: 10px; color: #8b949e;
+    min-height: 80px;
+  }
+  .block {
+    display: inline-block; padding: 2px 6px; margin: 2px; border-radius: 3px;
+    font-size: 10px; transition: all 0.4s;
+  }
+  .block.empty {
+    background: #21262d; color: #8b949e; border: 1px dashed #30363d;
+  }
+  .block.data {
+    background: #0a1e3d; color: #79c0ff; border: 1px solid #58a6ff;
+    font-weight: 600;
+    animation: blockAppear 0.6s ease;
+  }
+  .block.metadata {
+    background: #1a2e1a; color: #7ee787; border: 1px solid #7ee787;
+    font-weight: 600;
+    animation: blockAppear 0.6s ease;
+  }
+  .block.wal {
+    background: #1f1428; color: #d2a8ff; border: 1px solid #d2a8ff;
+    font-weight: 600;
+    animation: blockAppear 0.6s ease;
+  }
+  .block.bluefs {
+    background: #1f1a07; color: #f1c40f; border: 1px solid #f1c40f;
+    font-weight: 600;
+  }
+  @keyframes blockAppear {
+    from { opacity: 0; transform: scale(0.6); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  /* Layout */
+  .grid {
+    display: grid; grid-template-columns: 1fr 360px; gap: 16px;
+  }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+
+  /* Trace */
+  .trace {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: 12px; font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px; max-height: 380px; overflow-y: auto;
+  }
+  .trace-line {
+    padding: 5px 0; border-bottom: 1px dashed #21262d;
+    color: #c9d1d9; line-height: 1.5;
+  }
+  .trace-line:last-child { border-bottom: none; }
+  .trace-line .step { color: #58a6ff; font-weight: 600; }
+  .trace-line .hl { color: #f1c40f; }
+  .trace-line .ok { color: #7ee787; }
+  .trace-line .err { color: #f85149; }
+  .trace-line .addr { color: #f1c40f; font-weight: 600; }
+  .trace-line .timing { color: #8b949e; font-size: 10px; }
+  .trace-empty {
+    color: #8b949e; font-style: italic; text-align: center; padding: 20px;
+  }
+
+  /* Comparison */
+  .compare-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    margin-bottom: 8px;
+  }
+  .compare-card {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: 10px;
+  }
+  .compare-title {
+    font-weight: 700; font-size: 12px; margin-bottom: 6px;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .compare-title.bs { color: #7ee787; }
+  .compare-title.fs { color: #f85149; }
+  .compare-detail {
+    font-size: 11px; color: #8b949e; line-height: 1.6;
+  }
+  .compare-stat {
+    font-size: 13px; font-weight: 700; color: #c9d1d9;
+    font-family: 'SF Mono', Consolas, monospace; margin-top: 4px;
+  }
+
+  /* Stats panel */
+  .stats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  }
+  .stat {
+    background: #0d1117; padding: 10px; border-radius: 6px;
+    border: 1px solid #21262d; text-align: center;
+  }
+  .stat .label {
+    font-size: 9px; color: #8b949e; text-transform: uppercase;
+  }
+  .stat .value {
+    font-size: 18px; font-weight: 700; color: #c9d1d9;
+    font-family: 'SF Mono', Consolas, monospace; margin-top: 2px;
+  }
+  .stat .value.good { color: #7ee787; }
+  .stat .value.warn { color: #f1c40f; }
+
+  .arrow {
+    position: absolute; color: #58a6ff; font-size: 24px;
+    pointer-events: none; opacity: 0; transition: opacity 0.3s;
+  }
+  .arrow.active { opacity: 1; }
+
+  .ack-banner {
+    background: linear-gradient(135deg, #1a2e1a, #0a1e3d);
+    border: 2px solid #7ee787; border-radius: 8px;
+    padding: 12px 16px; margin-top: 12px; text-align: center;
+    display: none;
+  }
+  .ack-banner.show { display: block; animation: ackAppear 0.5s ease; }
+  @keyframes ackAppear {
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .ack-title {
+    font-weight: 700; color: #7ee787; font-size: 14px;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .ack-detail {
+    font-size: 11px; color: #c9d1d9; margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>🗄️ BlueStore — How an OSD Stores Bytes</h1>
+  <p class="subtitle">The complete write path inside a single OSD: ObjectStore Transaction → BlueStore (raw data + RocksDB metadata + WAL) → ACK to primary.</p>
+
+  <!-- Deployment selector -->
+  <div class="panel">
+    <div class="panel-title">
+      <span>⚙️ Deployment Layout</span>
+      <span class="hint">Where each BlueStore component physically lives</span>
+    </div>
+    <div class="deployment-toggle">
+      <div class="deploy-option active" id="deploy-single" onclick="setDeploy('single')">
+        <div class="deploy-icons">💾</div>
+        <div class="deploy-name">Single Device</div>
+        <div class="deploy-desc">All BlueStore components on one drive. Simple but bottlenecked by primary device.</div>
+      </div>
+      <div class="deploy-option" id="deploy-tiered" onclick="setDeploy('tiered')">
+        <div class="deploy-icons">💾 💿 ⚡</div>
+        <div class="deploy-name">Tiered (HDD + SSD + NVMe)</div>
+        <div class="deploy-desc">Data on HDD, RocksDB on SSD, WAL on NVMe. Production HDD pattern.</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="input-group">
+        <label>Object name</label>
+        <input type="text" id="obj-name" value="NYAN" style="width:140px;">
+      </div>
+      <div class="input-group">
+        <label>Object data (bytes)</label>
+        <input type="text" id="obj-data" value="ABCDEFGHIJKL" style="width:200px;">
+      </div>
+      <button onclick="writeObject()">▶ Write Object</button>
+      <button class="secondary" onclick="readObject()">📖 Read</button>
+      <button class="secondary" onclick="resetState()">↺ Reset</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- LEFT: BlueStore engine -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">
+          <span>🔧 OSD Process — Internal Architecture</span>
+          <span class="hint">ObjectStore → BlueStore → BlueFS → raw device</span>
+        </div>
+
+        <div class="osd-container">
+          <div class="osd-label">┌── ceph-osd@ daemon ────────────────────────────────────</div>
+
+          <!-- Three logical components -->
+          <div class="components">
+            <div class="component" id="comp-sequencer">
+              <div class="component-name">
+                Sequencer
+                <span class="badge isol">I</span>
+              </div>
+              <div class="component-purpose">Per-PG queue. Orders concurrent writes.</div>
+              <div class="component-state" id="seq-state">idle</div>
+            </div>
+            <div class="component" id="comp-objstore">
+              <div class="component-name">
+                ObjectStore (Tx)
+                <span class="badge atom">A</span>
+              </div>
+              <div class="component-purpose">All-or-nothing transaction wrapper.</div>
+              <div class="component-state" id="tx-state">no active tx</div>
+            </div>
+            <div class="component" id="comp-bluestore">
+              <div class="component-name">
+                BlueStore
+                <span class="badge cons">C</span>
+              </div>
+              <div class="component-purpose">Engine: data + metadata + WAL coordinator.</div>
+              <div class="component-state" id="bs-state">ready</div>
+            </div>
+          </div>
+
+          <!-- Physical devices -->
+          <div class="devices" id="devices"></div>
+
+          <div class="ack-banner" id="ack-banner">
+            <div class="ack-title">✓ TRANSACTION COMMITTED</div>
+            <div class="ack-detail" id="ack-detail">Object written. Ack returned to primary OSD.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Stats + trace -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">📊 Write Performance</div>
+        <div class="stats">
+          <div class="stat">
+            <div class="label">Object bytes</div>
+            <div class="value" id="s-bytes">—</div>
+          </div>
+          <div class="stat">
+            <div class="label">Total bytes written</div>
+            <div class="value" id="s-total">—</div>
+          </div>
+          <div class="stat">
+            <div class="label">Write amp</div>
+            <div class="value good" id="s-amp">—</div>
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #8b949e; margin-top: 8px; line-height: 1.5;">
+          BlueStore writes data <strong>once</strong> to disk + a small metadata commit.
+          FileStore would write the same data <strong>twice</strong> (journal + filesystem).
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">⚖️ vs. FileStore (the old way)</div>
+        <div class="compare-row">
+          <div class="compare-card">
+            <div class="compare-title bs">BlueStore</div>
+            <div class="compare-detail">
+              Data → raw blocks<br>
+              Metadata → RocksDB<br>
+              WAL → small commit
+            </div>
+            <div class="compare-stat good" id="bs-write">12 + 80 = 92 B</div>
+          </div>
+          <div class="compare-card">
+            <div class="compare-title fs">FileStore</div>
+            <div class="compare-detail">
+              Data → journal (1st)<br>
+              Data → XFS file (2nd)<br>
+              + filesystem overhead
+            </div>
+            <div class="compare-stat" id="fs-write">24+ B (2× write)</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">📜 Trace</div>
+        <div class="trace" id="trace">
+          <div class="trace-empty">Click "Write Object" to watch the BlueStore engine work.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let deploymentMode = 'single';
+let objectStore = {}; // map: name -> {addr, len, pg, checksum, compression}
+let nextAddr = 0x4A000;
+let walLog = []; // entries
+
+function setDeploy(mode) {
+  deploymentMode = mode;
+  document.getElementById('deploy-single').classList.toggle('active', mode === 'single');
+  document.getElementById('deploy-tiered').classList.toggle('active', mode === 'tiered');
+  renderDevices();
+}
+
+function renderDevices() {
+  const el = document.getElementById('devices');
+  if (deploymentMode === 'single') {
+    el.innerHTML = `
+      <div class="device" id="device-main">
+        <div class="device-header">
+          <div class="device-name">/dev/nvme0n1 <span class="device-type ssd">SSD</span></div>
+          <div class="device-perf">~80k IOPS · 500 MB/s</div>
+        </div>
+        <div style="font-size:10px; color:#8b949e; margin-bottom:6px;">
+          Hosts: object data + BlueFS (for RocksDB) + WAL
+        </div>
+        <div class="device-content" id="dc-main">
+          <span class="block empty">free</span>
+        </div>
+      </div>
+    `;
+  } else {
+    el.innerHTML = `
+      <div class="device" id="device-hdd">
+        <div class="device-header">
+          <div class="device-name">/dev/sda <span class="device-type hdd">HDD</span></div>
+          <div class="device-perf">~150 IOPS · 200 MB/s · 18 TB</div>
+        </div>
+        <div style="font-size:10px; color:#8b949e; margin-bottom:6px;">
+          Hosts: object data only (large, sequential)
+        </div>
+        <div class="device-content" id="dc-data">
+          <span class="block empty">free</span>
+        </div>
+      </div>
+      <div class="device" id="device-ssd">
+        <div class="device-header">
+          <div class="device-name">/dev/sdb <span class="device-type ssd">SSD</span></div>
+          <div class="device-perf">~80k IOPS · 500 MB/s · 480 GB</div>
+        </div>
+        <div style="font-size:10px; color:#8b949e; margin-bottom:6px;">
+          Hosts: BlueFS partition with RocksDB (SST files)
+        </div>
+        <div class="device-content" id="dc-db">
+          <span class="block bluefs">BlueFS (RocksDB SSTs)</span>
+        </div>
+      </div>
+      <div class="device" id="device-nvme">
+        <div class="device-header">
+          <div class="device-name">/dev/nvme0n1p1 <span class="device-type nvme">NVMe</span></div>
+          <div class="device-perf">~500k IOPS · 3.5 GB/s · 50 GB</div>
+        </div>
+        <div style="font-size:10px; color:#8b949e; margin-bottom:6px;">
+          Hosts: WAL (latency-critical, fsync-heavy)
+        </div>
+        <div class="device-content" id="dc-wal">
+          <span class="block empty">WAL ring buffer</span>
+        </div>
+      </div>
+    `;
+  }
+}
+
+// ============ Write animation ============
+function clearTrace() {
+  document.getElementById('trace').innerHTML = '';
+}
+function addTrace(html) {
+  const t = document.getElementById('trace');
+  if (t.querySelector('.trace-empty')) t.innerHTML = '';
+  const line = document.createElement('div');
+  line.className = 'trace-line';
+  line.innerHTML = html;
+  t.appendChild(line);
+  t.scrollTop = t.scrollHeight;
+}
+
+function activate(id, on = true) {
+  document.getElementById(id)?.classList.toggle('active', on);
+}
+
+function clearAllActive() {
+  ['comp-sequencer', 'comp-objstore', 'comp-bluestore',
+   'device-main', 'device-hdd', 'device-ssd', 'device-nvme'].forEach(id => {
+    document.getElementById(id)?.classList.remove('active');
+  });
+}
+
+function setState(id, html) {
+  document.getElementById(id).innerHTML = html;
+}
+
+async function writeObject() {
+  clearTrace();
+  document.getElementById('ack-banner').classList.remove('show');
+  clearAllActive();
+
+  const name = document.getElementById('obj-name').value.trim() || 'NYAN';
+  const data = document.getElementById('obj-data').value;
+  const len = data.length;
+  const addr = nextAddr;
+  nextAddr += Math.ceil(len / 4096) * 4096;
+
+  document.getElementById('s-bytes').textContent = len + ' B';
+
+  // STEP 1: Sequencer
+  addTrace(`<span class="step">[1]</span> Write request arrives at OSD for object <span class="hl">${name}</span> (${len} bytes). Routed to Sequencer for PG 4.1a.`);
+  activate('comp-sequencer');
+  setState('seq-state', `<span class="key">PG 4.1a queue:</span><br><span class="val">[${name}]</span>`);
+  await sleep(600);
+
+  // STEP 2: ObjectStore creates Transaction
+  activate('comp-sequencer', false);
+  activate('comp-objstore');
+  addTrace(`<span class="step">[2]</span> ObjectStore opens a <span class="hl">Transaction</span>. All ops within will be atomic — commit or abort, no partial state.`);
+  setState('tx-state', `<span class="key">tx_${Math.floor(Math.random()*9999)}:</span><br><span class="val">WRITE ${name}</span>`);
+  await sleep(600);
+
+  // STEP 3: BlueStore plans
+  activate('comp-objstore', false);
+  activate('comp-bluestore');
+  const checksum = '0x' + Math.floor(Math.random() * 0xFFFFFFFF).toString(16).toUpperCase();
+  addTrace(`<span class="step">[3]</span> BlueStore plans the write: allocate ${len} bytes at <span class="addr">offset 0x${addr.toString(16).toUpperCase()}</span>, compute checksum <span class="addr">${checksum}</span>.`);
+  setState('bs-state', `<span class="key">allocate:</span> <span class="addr">0x${addr.toString(16).toUpperCase()}</span><br><span class="key">checksum:</span> <span class="val">${checksum}</span>`);
+  await sleep(700);
+
+  // STEP 4: Parallel writes - data + metadata + WAL
+  addTrace(`<span class="step">[4]</span> BlueStore issues writes <span class="hl">in parallel</span>:`);
+  await sleep(300);
+
+  // 4a: Raw data write
+  let dataDevice, dbDevice, walDevice;
+  if (deploymentMode === 'single') {
+    dataDevice = 'device-main'; dbDevice = 'device-main'; walDevice = 'device-main';
+  } else {
+    dataDevice = 'device-hdd'; dbDevice = 'device-ssd'; walDevice = 'device-nvme';
+  }
+
+  activate(dataDevice);
+  const dataContainer = deploymentMode === 'single' ? 'dc-main' : 'dc-data';
+  const emptyEl = document.querySelector(`#${dataContainer} .empty`);
+  if (emptyEl) emptyEl.remove();
+  const dataBlock = document.createElement('span');
+  dataBlock.className = 'block data';
+  dataBlock.textContent = `${name}@0x${addr.toString(16).toUpperCase()}: "${data}"`;
+  document.getElementById(dataContainer).appendChild(dataBlock);
+  addTrace(`&nbsp;&nbsp;<span class="step">↳ a)</span> Object payload "${data}" → raw block device at <span class="addr">0x${addr.toString(16).toUpperCase()}</span>. <span class="timing">${deploymentMode === 'tiered' ? 'HDD' : 'SSD'} write, no filesystem.</span>`);
+  await sleep(900);
+
+  // 4b: WAL entry
+  activate(walDevice);
+  const walContainer = deploymentMode === 'single' ? 'dc-main' : 'dc-wal';
+  if (deploymentMode === 'tiered') {
+    const emptyWAL = document.querySelector(`#${walContainer} .empty`);
+    if (emptyWAL) emptyWAL.remove();
+  }
+  const walBlock = document.createElement('span');
+  walBlock.className = 'block wal';
+  walBlock.textContent = `WAL: tx_${name} commit`;
+  document.getElementById(walContainer).appendChild(walBlock);
+  addTrace(`&nbsp;&nbsp;<span class="step">↳ b)</span> WAL entry for transaction → write-ahead log. <span class="timing">${deploymentMode === 'tiered' ? 'NVMe fsync' : 'same device'}, small (~80 bytes).</span>`);
+  await sleep(700);
+
+  // 4c: RocksDB metadata
+  activate(dbDevice);
+  const dbContainer = deploymentMode === 'single' ? 'dc-main' : 'dc-db';
+  const metaBlock = document.createElement('span');
+  metaBlock.className = 'block metadata';
+  metaBlock.textContent = `RocksDB: ${name}→{0x${addr.toString(16).toUpperCase()},${len}B,${checksum.slice(0,6)}}`;
+  document.getElementById(dbContainer).appendChild(metaBlock);
+  addTrace(`&nbsp;&nbsp;<span class="step">↳ c)</span> Metadata kv-entry → RocksDB via BlueFS: <span class="val">"${name}"</span> → {addr:<span class="addr">0x${addr.toString(16).toUpperCase()}</span>, len:${len}, checksum, pg:4.1a}.`);
+  await sleep(800);
+
+  // STEP 5: fsync + commit
+  addTrace(`<span class="step">[5]</span> Once all three are durable (fsync'd), BlueStore commits the transaction. Sequencer dequeues next write.`);
+  setState('tx-state', `<span class="val">✓ committed</span>`);
+  setState('bs-state', `<span class="val">✓ durable</span><br><span class="key">next op...</span>`);
+  setState('seq-state', `<span class="val">queue empty</span>`);
+  await sleep(700);
+
+  // Update stats
+  const totalBytes = len + 80; // data + small metadata
+  const writeAmp = (totalBytes / len).toFixed(2);
+  document.getElementById('s-total').textContent = totalBytes + ' B';
+  document.getElementById('s-amp').textContent = writeAmp + '×';
+  document.getElementById('bs-write').textContent = `${len} + 80 = ${totalBytes} B`;
+  document.getElementById('fs-write').textContent = `${len * 2}+ B (2× write)`;
+
+  // Save object metadata
+  objectStore[name] = { addr, len, data, checksum, pg: '4.1a' };
+
+  // Ack
+  clearAllActive();
+  document.getElementById('ack-banner').classList.add('show');
+  document.getElementById('ack-detail').innerHTML =
+    `Object <strong>${name}</strong> written. ${len} B payload + ~80 B metadata. ` +
+    `<span style="color:#7ee787">Write amplification: ${writeAmp}× vs FileStore's ~2.0×.</span>`;
+
+  addTrace(`<span class="ok">✓ ACK sent back to primary OSD.</span> Total bytes written: <span class="hl">${totalBytes}</span>. Write amplification: <span class="hl">${writeAmp}×</span>.`);
+}
+
+async function readObject() {
+  const name = document.getElementById('obj-name').value.trim();
+  clearTrace();
+  document.getElementById('ack-banner').classList.remove('show');
+  clearAllActive();
+
+  const obj = objectStore[name];
+  if (!obj) {
+    addTrace(`<span class="err">⚠ Object "${name}" not found. Write it first.</span>`);
+    return;
+  }
+
+  addTrace(`<span class="step">[1]</span> Read request for <span class="hl">${name}</span> arrives at OSD.`);
+  await sleep(500);
+
+  // RocksDB lookup
+  const dbDevice = deploymentMode === 'single' ? 'device-main' : 'device-ssd';
+  activate(dbDevice);
+  addTrace(`<span class="step">[2]</span> BlueStore queries RocksDB: <span class="hl">${name}</span> → <span class="addr">0x${obj.addr.toString(16).toUpperCase()}</span>, len=${obj.len}, checksum=<span class="addr">${obj.checksum}</span>. <span class="timing">${deploymentMode === 'tiered' ? 'SSD random read' : ''}</span>`);
+  await sleep(700);
+
+  // Raw block read
+  activate(dbDevice, false);
+  const dataDevice = deploymentMode === 'single' ? 'device-main' : 'device-hdd';
+  activate(dataDevice);
+  addTrace(`<span class="step">[3]</span> Seek to <span class="addr">0x${obj.addr.toString(16).toUpperCase()}</span>, read ${obj.len} bytes from raw device. <span class="timing">${deploymentMode === 'tiered' ? 'HDD sequential read' : ''}</span>`);
+  await sleep(800);
+
+  // Verify checksum
+  activate(dataDevice, false);
+  activate('comp-bluestore');
+  addTrace(`<span class="step">[4]</span> Verify checksum: stored=<span class="addr">${obj.checksum}</span> vs computed=<span class="addr">${obj.checksum}</span> ✓ <span class="ok">match</span>. <em>Bit-rot detection on every read — no waiting for the next scrub.</em>`);
+  await sleep(600);
+
+  addTrace(`<span class="ok">✓ Return "${obj.data}" to caller.</span>`);
+  clearAllActive();
+}
+
+function resetState() {
+  objectStore = {};
+  nextAddr = 0x4A000;
+  walLog = [];
+  clearTrace();
+  document.getElementById('ack-banner').classList.remove('show');
+  clearAllActive();
+  setState('seq-state', 'idle');
+  setState('tx-state', 'no active tx');
+  setState('bs-state', 'ready');
+  document.getElementById('s-bytes').textContent = '—';
+  document.getElementById('s-total').textContent = '—';
+  document.getElementById('s-amp').textContent = '—';
+  renderDevices();
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Init
+renderDevices();
+</script>
+</body>
+</html>
