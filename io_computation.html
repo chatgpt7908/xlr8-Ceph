@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ceph I/O Computation Visualizer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0d1117; color: #e6edf3; padding: 24px; line-height: 1.5;
+  }
+  .app { max-width: 1300px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; color: #58a6ff; }
+  .subtitle { color: #8b949e; font-size: 14px; margin-bottom: 24px; }
+
+  .grid {
+    display: grid; grid-template-columns: 1fr 360px; gap: 16px;
+  }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 18px; margin-bottom: 16px;
+  }
+  .panel-title {
+    font-size: 12px; color: #58a6ff; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 600; margin-bottom: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel-title .hint { font-size: 11px; color: #8b949e; font-weight: normal; text-transform: none; }
+
+  /* Inputs */
+  .inputs {
+    display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px;
+    align-items: end;
+  }
+  .input-group label {
+    display: block; font-size: 11px; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
+  }
+  .input-group input, .input-group select {
+    background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+    padding: 10px 12px; border-radius: 6px; font-size: 14px;
+    font-family: 'SF Mono', Consolas, monospace; width: 100%;
+  }
+  .input-group input:focus { border-color: #58a6ff; outline: none; }
+
+  button {
+    background: #238636; color: white; border: none; padding: 10px 18px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+    transition: all 0.15s;
+  }
+  button:hover { background: #2ea043; }
+  button.secondary {
+    background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+    font-weight: 500; padding: 8px 14px; font-size: 12px;
+  }
+  button.secondary:hover { background: #30363d; }
+  button.warn { background: #21262d; border: 1px solid #f1c40f; color: #f1c40f; }
+  button.warn:hover { background: #2d2a07; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Pipeline */
+  .pipeline {
+    display: grid; gap: 10px;
+  }
+  .step {
+    background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+    padding: 12px 14px; display: grid;
+    grid-template-columns: 36px 1fr; gap: 12px; align-items: start;
+    opacity: 0.3; transition: all 0.4s;
+    position: relative;
+  }
+  .step.active {
+    opacity: 1; border-color: #f1c40f;
+    box-shadow: 0 0 16px rgba(241, 196, 15, 0.2);
+  }
+  .step.done { opacity: 1; border-color: #21262d; }
+  .step.network {
+    border-left: 4px solid #f85149;
+  }
+  .step.local {
+    border-left: 4px solid #7ee787;
+  }
+  .step-num {
+    background: #21262d; color: #58a6ff;
+    border-radius: 6px; width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-family: 'SF Mono', Consolas, monospace;
+    font-size: 14px;
+  }
+  .step.active .step-num { background: #f1c40f; color: #0d1117; }
+  .step.done .step-num { background: #1a2e1a; color: #7ee787; }
+
+  .step-content {
+    display: grid; gap: 4px;
+  }
+  .step-title {
+    font-size: 13px; font-weight: 600; color: #c9d1d9;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .step-tag {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    font-weight: 600; font-family: 'SF Mono', Consolas, monospace;
+  }
+  .step-tag.local { background: #1a2e1a; color: #7ee787; }
+  .step-tag.network { background: #2d0a0a; color: #f85149; }
+  .step-description {
+    font-size: 11px; color: #8b949e;
+  }
+  .step-calc {
+    background: #161b22; border: 1px solid #21262d; border-radius: 4px;
+    padding: 8px 10px; font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12px; color: #c9d1d9; margin-top: 6px;
+    overflow-x: auto; white-space: nowrap;
+  }
+  .step-calc .var { color: #58a6ff; }
+  .step-calc .const { color: #f1c40f; }
+  .step-calc .str { color: #a5d6ff; }
+  .step-calc .num { color: #79c0ff; }
+  .step-calc .op { color: #8b949e; }
+  .step-calc .out { color: #7ee787; font-weight: 700; }
+
+  /* Cluster map */
+  .map-section {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: 12px; margin-bottom: 10px;
+  }
+  .map-title {
+    font-size: 11px; color: #8b949e; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 8px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .map-title .epoch {
+    color: #d2a8ff; font-family: 'SF Mono', Consolas, monospace; font-weight: 600;
+  }
+  .pool-entry, .osd-entry {
+    display: flex; justify-content: space-between;
+    padding: 4px 6px; border-radius: 4px;
+    font-family: 'SF Mono', Consolas, monospace; font-size: 11px;
+    margin-bottom: 2px;
+  }
+  .pool-entry { background: #161b22; }
+  .pool-entry:hover { background: #21262d; cursor: pointer; }
+  .pool-entry.selected { background: #1f1a07; color: #f1c40f; }
+  .pool-entry .name { color: #c9d1d9; }
+  .pool-entry .id { color: #f1c40f; }
+  .osd-entry .status.up { color: #7ee787; }
+  .osd-entry .status.down { color: #f85149; }
+  .osd-entry.changed {
+    animation: changed 1.5s ease;
+  }
+  @keyframes changed {
+    0% { background: #f1c40f; }
+    100% { background: transparent; }
+  }
+
+  /* Result box */
+  .result {
+    background: linear-gradient(135deg, #0a1e3d, #1f1428);
+    border: 2px solid #58a6ff; border-radius: 8px;
+    padding: 16px; margin-top: 12px;
+    display: none;
+  }
+  .result.show { display: block; animation: resultPop 0.5s ease; }
+  @keyframes resultPop {
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .result-title {
+    font-size: 12px; color: #58a6ff; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 8px;
+  }
+  .result-content {
+    font-family: 'SF Mono', Consolas, monospace; font-size: 16px;
+    color: #c9d1d9; line-height: 1.8;
+  }
+  .result .label { color: #8b949e; font-size: 11px; }
+  .result .full-pg { color: #f1c40f; font-size: 22px; font-weight: 700; }
+  .result .primary { color: #7ee787; font-weight: 700; }
+  .result .actset { color: #d2a8ff; }
+
+  /* Session stats */
+  .stats {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  }
+  .stat {
+    background: #0d1117; padding: 10px; border-radius: 6px;
+    border: 1px solid #21262d; text-align: center;
+  }
+  .stat .label { font-size: 10px; color: #8b949e; text-transform: uppercase; }
+  .stat .value {
+    font-size: 22px; font-weight: 700; color: #c9d1d9; margin-top: 4px;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .stat .value.good { color: #7ee787; }
+  .stat .value.warn { color: #f1c40f; }
+  .stat .extra { font-size: 10px; color: #8b949e; margin-top: 2px; }
+
+  .examples {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;
+  }
+  .example-btn {
+    background: #21262d; color: #8b949e; border: 1px solid #30363d;
+    padding: 4px 10px; border-radius: 12px; font-size: 11px; cursor: pointer;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .example-btn:hover { color: #58a6ff; border-color: #58a6ff; }
+
+  .legend {
+    display: flex; gap: 14px; font-size: 11px; color: #8b949e;
+    margin-top: 10px;
+  }
+  .legend-bar { width: 14px; height: 4px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>⚙️ Ceph I/O Computation — The 7-Step Calculation</h1>
+  <p class="subtitle">Watch the client compute everything locally. The only thing that hits the network is the final write to the primary OSD.</p>
+
+  <div class="grid">
+    <!-- LEFT: Pipeline -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">
+          <span>📥 Application Call</span>
+          <span class="hint">All client gives librados is: pool name + object name</span>
+        </div>
+        <div class="inputs">
+          <div class="input-group">
+            <label>pool name</label>
+            <input type="text" id="pool-name" value="liverpool">
+          </div>
+          <div class="input-group">
+            <label>object id</label>
+            <input type="text" id="obj-id" value="john">
+          </div>
+          <button onclick="compute()">▶ Compute</button>
+        </div>
+        <div class="examples">
+          <span style="font-size:11px; color:#8b949e; padding:4px 0;">Try:</span>
+          <span class="example-btn" onclick="setExample('liverpool','john')">liverpool / john (doc example)</span>
+          <span class="example-btn" onclick="setExample('rbd_pool','vm-disk-001')">rbd_pool / vm-disk-001</span>
+          <span class="example-btn" onclick="setExample('rgw_data','user/photo.jpg')">rgw_data / user/photo.jpg</span>
+          <span class="example-btn" onclick="setExample('logs','2026-05-20.log')">logs / 2026-05-20.log</span>
+        </div>
+        <div class="legend">
+          <div style="display:flex; align-items:center; gap:6px;"><div class="legend-bar" style="background:#7ee787;"></div>Local CPU work (no network)</div>
+          <div style="display:flex; align-items:center; gap:6px;"><div class="legend-bar" style="background:#f85149;"></div>Network operation</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">🔧 Computation Pipeline (7 steps from the doc)</div>
+        <div class="pipeline" id="pipeline"></div>
+
+        <div class="result" id="result">
+          <div class="result-title">✓ Computation Complete</div>
+          <div class="result-content" id="result-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Cluster map + stats -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">
+          <span>📊 Session Stats</span>
+        </div>
+        <div class="stats">
+          <div class="stat">
+            <div class="label">I/Os done</div>
+            <div class="value good" id="s-ops">0</div>
+            <div class="extra">since map fetched</div>
+          </div>
+          <div class="stat">
+            <div class="label">Metadata roundtrips</div>
+            <div class="value good" id="s-roundtrips">0</div>
+            <div class="extra">just for placement</div>
+          </div>
+        </div>
+        <div style="margin-top: 12px; font-size: 12px; color: #8b949e;">
+          With a traditional metadata server: <span style="color:#f85149">~<span id="trad-rt">0</span> roundtrips</span> would have been needed (one per I/O).
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">
+          <span>🗺️ Cached Cluster Map</span>
+          <span class="hint" id="epoch-display"></span>
+        </div>
+
+        <div class="map-section">
+          <div class="map-title">
+            <span>Pools (name → id)</span>
+            <span style="font-size:10px; color:#8b949e;">click to select</span>
+          </div>
+          <div id="pool-list"></div>
+        </div>
+
+        <div class="map-section">
+          <div class="map-title">
+            <span>OSDs</span>
+            <span style="font-size:10px; color:#8b949e;" id="osd-summary">— up, — down</span>
+          </div>
+          <div id="osd-list" style="max-height: 200px; overflow-y: auto;"></div>
+        </div>
+
+        <button class="secondary" onclick="refreshMap()" style="width:100%; margin-bottom:6px;">
+          ↻ Fetch new cluster map from monitor
+        </button>
+        <button class="warn" onclick="failOSD()" style="width:100%;">
+          ⚡ Simulate OSD failure (map will be stale)
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============ Cluster map ============
+let clusterMap = {
+  epoch: 142,
+  pools: [
+    { id: 1, name: 'cephfs_metadata', pg_num: 8 },
+    { id: 2, name: '.rgw.root', pg_num: 8 },
+    { id: 3, name: 'rbd_pool', pg_num: 64 },
+    { id: 4, name: 'liverpool', pg_num: 128 },  // From the doc!
+    { id: 5, name: 'rgw_data', pg_num: 64 },
+    { id: 6, name: 'logs', pg_num: 32 },
+  ],
+  osds: [],
+};
+
+// Generate 20 OSDs
+for (let i = 0; i < 20; i++) {
+  clusterMap.osds.push({ id: i, status: 'up', weight: 1.0 });
+}
+
+let sessionOps = 0;
+let mapStale = false;
+let lastResult = null;
+
+// ============ Hash ============
+function hash(s) {
+  // FNV-1a hash, returns unsigned 32-bit
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h;
+}
+
+function computeCRUSHPrimary(pgId, pool) {
+  // Simplified CRUSH: pick the OSD with the lowest hash(pgId, osdId) among "up" OSDs
+  const upOsds = clusterMap.osds.filter(o => o.status === 'up');
+  if (upOsds.length === 0) return null;
+  const scored = upOsds.map(o => ({
+    id: o.id,
+    score: hash(`p${pool.id}-pg${pgId}-osd${o.id}`)
+  })).sort((a, b) => a.score - b.score);
+  return scored.slice(0, 3); // acting set of 3
+}
+
+// ============ Pipeline rendering ============
+const stepDefs = [
+  {
+    num: 1, title: 'Application input',
+    desc: 'librados receives the pool name and object ID. Nothing else.',
+    tag: 'local', calc: null,
+  },
+  {
+    num: 2, title: 'Hash the object name',
+    desc: 'CRUSH applies a hash function (here: FNV-1a) to the object name. Pure CPU operation.',
+    tag: 'local', calc: null,
+  },
+  {
+    num: 3, title: 'Hash mod pg_num → PG ID',
+    desc: 'Bucket the hash into one of the pool\'s placement groups.',
+    tag: 'local', calc: null,
+  },
+  {
+    num: 4, title: 'CRUSH → primary OSD',
+    desc: 'Run the CRUSH algorithm with the PG ID and cluster map. Returns the Acting Set; the first OSD is the primary.',
+    tag: 'local', calc: null,
+  },
+  {
+    num: 5, title: 'Pool name → pool ID',
+    desc: 'Look up the pool ID in the cached cluster map. Just a hashtable lookup.',
+    tag: 'local', calc: null,
+  },
+  {
+    num: 6, title: 'Build full PG ID',
+    desc: 'Prepend the pool ID to the PG ID. Format: "poolid.pgid" in hex.',
+    tag: 'local', calc: null,
+  },
+  {
+    num: 7, title: 'Connect to primary OSD',
+    desc: 'TCP connect directly to the primary OSD. THIS is the only network operation, and it carries the actual data — not a metadata lookup.',
+    tag: 'network', calc: null,
+  },
+];
+
+function renderPipeline() {
+  const el = document.getElementById('pipeline');
+  el.innerHTML = stepDefs.map(s => `
+    <div class="step ${s.tag}" id="step-${s.num}">
+      <div class="step-num">${s.num}</div>
+      <div class="step-content">
+        <div class="step-title">
+          ${s.title}
+          <span class="step-tag ${s.tag}">${s.tag === 'local' ? 'CPU' : 'NETWORK'}</span>
+        </div>
+        <div class="step-description">${s.desc}</div>
+        <div class="step-calc" id="calc-${s.num}" style="display:none;"></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderClusterMap() {
+  document.getElementById('epoch-display').innerHTML =
+    `epoch <span style="color:#d2a8ff; font-family:'SF Mono',Consolas,monospace;">${clusterMap.epoch}</span>` +
+    (mapStale ? ' <span style="color:#f85149">⚠ stale</span>' : '');
+
+  const poolListEl = document.getElementById('pool-list');
+  const currentPool = document.getElementById('pool-name').value.trim();
+  poolListEl.innerHTML = clusterMap.pools.map(p => `
+    <div class="pool-entry ${p.name === currentPool ? 'selected' : ''}" onclick="setPool('${p.name}')">
+      <span class="name">${p.name}</span>
+      <span class="id">id=${p.id}, pg_num=${p.pg_num}</span>
+    </div>
+  `).join('');
+
+  const osdListEl = document.getElementById('osd-list');
+  osdListEl.innerHTML = clusterMap.osds.map(o => `
+    <div class="osd-entry ${o.justChanged ? 'changed' : ''}">
+      <span>osd.${o.id}</span>
+      <span class="status ${o.status}">${o.status}</span>
+    </div>
+  `).join('');
+
+  const up = clusterMap.osds.filter(o => o.status === 'up').length;
+  const down = clusterMap.osds.length - up;
+  document.getElementById('osd-summary').textContent = `${up} up, ${down} down`;
+
+  document.getElementById('s-ops').textContent = sessionOps;
+  document.getElementById('s-roundtrips').textContent = 0;
+  document.getElementById('trad-rt').textContent = sessionOps;
+}
+
+// ============ Computation ============
+async function compute() {
+  const poolName = document.getElementById('pool-name').value.trim();
+  const objId = document.getElementById('obj-id').value.trim();
+
+  if (!poolName || !objId) {
+    alert('Please enter pool name and object ID.');
+    return;
+  }
+
+  // Reset pipeline
+  document.querySelectorAll('.step').forEach(s => {
+    s.classList.remove('active', 'done');
+  });
+  document.querySelectorAll('.step-calc').forEach(e => e.style.display = 'none');
+  document.getElementById('result').classList.remove('show');
+
+  // ---- STEP 1 ----
+  await activateStep(1);
+  showCalc(1, `<span class="var">pool_name</span> = <span class="str">"${poolName}"</span>
+<span class="var">object_id</span> = <span class="str">"${objId}"</span>`);
+  await sleep(700);
+
+  // ---- STEP 2: Hash ----
+  await activateStep(2);
+  const objHash = hash(objId);
+  const hashHex = '0x' + objHash.toString(16).padStart(8, '0');
+  showCalc(2, `<span class="var">h</span> = <span class="const">hash</span>(<span class="str">"${objId}"</span>) = <span class="out">${hashHex}</span> <span class="op">(${objHash})</span>`);
+  await sleep(800);
+
+  // ---- STEP 3: Mod ----
+  await activateStep(3);
+  const pool = clusterMap.pools.find(p => p.name === poolName);
+  if (!pool) {
+    showCalc(3, `<span style="color:#f85149">⚠ Pool "${poolName}" not found in cluster map. Click a pool on the right or refresh map.</span>`);
+    return;
+  }
+  const pgId = objHash % pool.pg_num;
+  showCalc(3, `<span class="var">pg_id</span> = <span class="const">${hashHex}</span> <span class="op">mod</span> <span class="num">${pool.pg_num}</span> = <span class="out">${pgId}</span> <span class="op">(0x${pgId.toString(16)})</span>`);
+  await sleep(800);
+
+  // ---- STEP 4: CRUSH ----
+  await activateStep(4);
+  const acting = computeCRUSHPrimary(pgId, pool);
+  if (!acting || acting.length === 0) {
+    showCalc(4, `<span style="color:#f85149">⚠ No healthy OSDs available.</span>`);
+    return;
+  }
+  showCalc(4, `<span class="var">acting_set</span> = <span class="const">CRUSH</span>(pg=<span class="num">${pgId}</span>, rule, map) = <span class="out">[osd.${acting.map(o => o.id).join(', osd.')}]</span>
+<span class="var">primary</span> = <span class="out">osd.${acting[0].id}</span> <span class="op">(first in acting set)</span>`);
+  await sleep(900);
+
+  // ---- STEP 5: Pool name → ID ----
+  await activateStep(5);
+  showCalc(5, `<span class="var">pool_id</span> = <span class="const">map.pools</span>[<span class="str">"${poolName}"</span>].id = <span class="out">${pool.id}</span>`);
+  await sleep(700);
+
+  // ---- STEP 6: Full PG ID ----
+  await activateStep(6);
+  const fullPgId = `${pool.id}.${pgId.toString(16)}`;
+  showCalc(6, `<span class="var">full_pg_id</span> = <span class="str">"${pool.id}"</span> + <span class="str">"."</span> + <span class="str">"${pgId.toString(16)}"</span> = <span class="out">"${fullPgId}"</span>`);
+  await sleep(800);
+
+  // ---- STEP 7: Connect ----
+  await activateStep(7);
+  showCalc(7, `<span class="op">TCP connect</span> → <span class="out">osd.${acting[0].id}</span>
+<span class="op">SEND</span> WRITE/READ for object <span class="str">"${objId}"</span> in PG <span class="str">"${fullPgId}"</span>`);
+  await sleep(900);
+
+  // Mark step 7 active still, others done
+  document.getElementById('step-7').classList.remove('active');
+  document.getElementById('step-7').classList.add('done');
+
+  // Show result
+  lastResult = { pool, pgId, fullPgId, acting, objId };
+  document.getElementById('result-content').innerHTML = `
+    <div><span class="label">Object:</span> "${objId}" in pool "${poolName}"</div>
+    <div><span class="label">Full PG ID:</span> <span class="full-pg">${fullPgId}</span></div>
+    <div><span class="label">Acting set:</span> <span class="actset">[osd.${acting.map(o => o.id).join(', osd.')}]</span></div>
+    <div><span class="label">Primary (client connects here):</span> <span class="primary">osd.${acting[0].id}</span></div>
+    <div style="margin-top:8px; font-size:12px; color:#8b949e;">
+      6 of 7 steps were local CPU work. 1 network connection — directly to the primary, carrying the actual data.
+    </div>
+  `;
+  document.getElementById('result').classList.add('show');
+
+  sessionOps++;
+  renderClusterMap();
+}
+
+async function activateStep(n) {
+  // Mark previous steps as done
+  for (let i = 1; i < n; i++) {
+    const el = document.getElementById('step-' + i);
+    el.classList.remove('active');
+    el.classList.add('done');
+  }
+  document.getElementById('step-' + n).classList.add('active');
+}
+
+function showCalc(n, html) {
+  const el = document.getElementById('calc-' + n);
+  el.style.display = 'block';
+  el.innerHTML = html;
+}
+
+function setPool(name) {
+  document.getElementById('pool-name').value = name;
+  renderClusterMap();
+}
+
+function setExample(pool, obj) {
+  document.getElementById('pool-name').value = pool;
+  document.getElementById('obj-id').value = obj;
+  renderClusterMap();
+}
+
+function refreshMap() {
+  clusterMap.epoch++;
+  mapStale = false;
+  sessionOps = 0;
+  clusterMap.osds.forEach(o => o.justChanged = false);
+  renderClusterMap();
+}
+
+function failOSD() {
+  const up = clusterMap.osds.filter(o => o.status === 'up');
+  if (up.length === 0) return;
+  const target = up[Math.floor(Math.random() * up.length)];
+  target.status = 'down';
+  target.justChanged = true;
+  mapStale = true;
+  renderClusterMap();
+  setTimeout(() => {
+    target.justChanged = false;
+    renderClusterMap();
+  }, 1500);
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Init
+renderPipeline();
+renderClusterMap();
+</script>
+</body>
+</html>
