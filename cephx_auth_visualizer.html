@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CephX Authentication Visualizer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
+    padding: 24px;
+    line-height: 1.5;
+  }
+  .app { max-width: 1300px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; color: #58a6ff; }
+  .subtitle { color: #8b949e; font-size: 14px; margin-bottom: 24px; }
+
+  .controls {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  button {
+    background: #238636;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  button:hover { background: #2ea043; }
+  button.secondary {
+    background: #21262d;
+    border: 1px solid #30363d;
+  }
+  button.secondary:hover { background: #30363d; }
+  button.toggle.active { background: #1f6feb; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .progress {
+    flex: 1;
+    background: #0d1117;
+    border-radius: 4px;
+    height: 6px;
+    overflow: hidden;
+    border: 1px solid #30363d;
+    min-width: 200px;
+  }
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #58a6ff, #1f6feb);
+    transition: width 0.4s ease;
+    width: 0%;
+  }
+  .step-counter {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 13px;
+    color: #8b949e;
+    min-width: 80px;
+  }
+
+  /* Main stage */
+  .stage {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .actors {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    position: relative;
+    min-height: 380px;
+  }
+  .actor {
+    background: #0d1117;
+    border: 2px solid #30363d;
+    border-radius: 8px;
+    padding: 14px;
+    position: relative;
+    z-index: 2;
+    transition: all 0.3s;
+  }
+  .actor.highlight {
+    border-color: #f1c40f;
+    box-shadow: 0 0 20px rgba(241, 196, 15, 0.3);
+  }
+  .actor-name {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .actor-role {
+    font-size: 11px;
+    color: #8b949e;
+    margin-bottom: 12px;
+  }
+  .vault {
+    background: #161b22;
+    border: 1px dashed #30363d;
+    border-radius: 6px;
+    padding: 10px;
+    margin-top: 8px;
+  }
+  .vault-title {
+    font-size: 10px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+  .key {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #0d1117;
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px;
+    border-left: 3px solid #30363d;
+    transition: all 0.3s;
+  }
+  .key.permanent { border-left-color: #f85149; }
+  .key.session { border-left-color: #d2a8ff; }
+  .key.ticket { border-left-color: #7ee787; }
+  .key.shared { border-left-color: #f1c40f; }
+  .key.fresh {
+    animation: keyPulse 0.8s ease;
+  }
+  @keyframes keyPulse {
+    0% { transform: scale(1); box-shadow: 0 0 0 rgba(241, 196, 15, 0); }
+    50% { transform: scale(1.05); box-shadow: 0 0 16px rgba(241, 196, 15, 0.6); }
+    100% { transform: scale(1); }
+  }
+  .key-icon { flex-shrink: 0; }
+  .key-label { color: #c9d1d9; }
+  .key-val { color: #8b949e; font-size: 10px; }
+  .key.expired { opacity: 0.4; text-decoration: line-through; }
+
+  /* Message arrows */
+  .msg-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 3;
+  }
+  .message {
+    position: absolute;
+    background: #1f2937;
+    border: 1px solid #58a6ff;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px;
+    color: #c9d1d9;
+    max-width: 280px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    animation: msgAppear 0.5s ease;
+  }
+  .message.encrypted {
+    background: #2d1b3d;
+    border-color: #d2a8ff;
+  }
+  .message.ticket {
+    background: #1a2e1a;
+    border-color: #7ee787;
+  }
+  .message .msg-from {
+    font-size: 9px;
+    color: #8b949e;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .message .msg-body {
+    color: #e6edf3;
+    word-break: break-all;
+  }
+  .message .lock { color: #d2a8ff; }
+  @keyframes msgAppear {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Attacker view */
+  .attacker {
+    background: #2d0a0a;
+    border: 1px solid #da3633;
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+  .attacker-title {
+    font-size: 13px;
+    color: #f85149;
+    font-weight: 600;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .attacker-content {
+    background: #0d1117;
+    padding: 10px;
+    border-radius: 6px;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px;
+    color: #8b949e;
+    min-height: 40px;
+    line-height: 1.6;
+  }
+  .ciphertext {
+    color: #d2a8ff;
+    filter: blur(0.5px);
+    letter-spacing: 0.5px;
+  }
+
+  /* Explainer */
+  .explainer {
+    background: #0d1117;
+    border-left: 3px solid #58a6ff;
+    padding: 14px;
+    border-radius: 0 6px 6px 0;
+    margin-bottom: 16px;
+  }
+  .explainer-title {
+    font-size: 13px;
+    color: #58a6ff;
+    font-weight: 600;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .explainer-body { font-size: 14px; color: #c9d1d9; }
+  .explainer-body code {
+    background: #161b22;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12px;
+    color: #f1c40f;
+  }
+
+  .phase-tracker {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .phase-pill {
+    padding: 6px 12px;
+    border-radius: 20px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    font-size: 11px;
+    color: #8b949e;
+    transition: all 0.3s;
+  }
+  .phase-pill.active {
+    background: #1f6feb;
+    border-color: #58a6ff;
+    color: white;
+    font-weight: 600;
+  }
+  .phase-pill.done {
+    background: #1a2e1a;
+    border-color: #7ee787;
+    color: #7ee787;
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: #8b949e;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-bar {
+    width: 14px;
+    height: 4px;
+    border-radius: 2px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>🔐 CephX Authentication Visualizer</h1>
+  <p class="subtitle">Step through how Alice authenticates with the Ceph cluster — without ever sending her secret over the network.</p>
+
+  <!-- Phase pills -->
+  <div class="phase-tracker" id="phases">
+    <div class="phase-pill" data-phase="0">Phase 0: Setup</div>
+    <div class="phase-pill" data-phase="1">Phase 1: Authenticate</div>
+    <div class="phase-pill" data-phase="2">Phase 2: Get Ticket</div>
+    <div class="phase-pill" data-phase="3">Phase 3: Use Service</div>
+    <div class="phase-pill" data-phase="4">Phase 4: Expiration</div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button onclick="prev()" class="secondary" id="prev-btn">← Back</button>
+    <button onclick="next()" id="next-btn">Next Step →</button>
+    <button onclick="autoPlay()" class="secondary" id="play-btn">▶ Auto-play</button>
+    <button onclick="reset()" class="secondary">↺ Reset</button>
+    <div class="progress"><div class="progress-bar" id="progress"></div></div>
+    <div class="step-counter" id="counter">0 / 14</div>
+  </div>
+
+  <!-- Explainer -->
+  <div class="explainer">
+    <div class="explainer-title" id="exp-title">Welcome</div>
+    <div class="explainer-body" id="exp-body">
+      Click <strong>Next Step</strong> to begin. We'll watch admin create Alice, then watch Alice authenticate and read data — all without her secret key leaving her laptop.
+    </div>
+  </div>
+
+  <!-- Main stage with actors -->
+  <div class="stage">
+    <div class="actors">
+      <!-- Client (Alice) -->
+      <div class="actor" id="actor-client">
+        <div class="actor-name">👤 Alice's Client</div>
+        <div class="actor-role">Wants to read/write objects</div>
+        <div class="vault">
+          <div class="vault-title">Keyring</div>
+          <div id="client-keys">
+            <div style="font-size:11px; color:#8b949e; font-style:italic;">(empty)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Monitor -->
+      <div class="actor" id="actor-mon">
+        <div class="actor-name">🏛️ Monitor (mon.a)</div>
+        <div class="actor-role">Authenticates users, issues tickets</div>
+        <div class="vault">
+          <div class="vault-title">Auth Database</div>
+          <div id="mon-keys">
+            <div class="key shared">
+              <span class="key-icon">🔗</span>
+              <span class="key-label">mon↔osd shared</span>
+              <span class="key-val">K_mo</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- OSD -->
+      <div class="actor" id="actor-osd">
+        <div class="actor-name">💾 OSD (osd.0)</div>
+        <div class="actor-role">Stores actual data</div>
+        <div class="vault">
+          <div class="vault-title">Trust Store</div>
+          <div id="osd-keys">
+            <div class="key shared">
+              <span class="key-icon">🔗</span>
+              <span class="key-label">mon↔osd shared</span>
+              <span class="key-val">K_mo</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="msg-layer" id="msgs"></div>
+  </div>
+
+  <!-- Attacker view -->
+  <div class="attacker">
+    <div class="attacker-title">🕵️ Attacker on the network sees:</div>
+    <div class="attacker-content" id="attacker">Nothing yet — no traffic.</div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><span class="legend-bar" style="background:#f85149;"></span>Permanent secret (forever)</div>
+    <div class="legend-item"><span class="legend-bar" style="background:#d2a8ff;"></span>Session key (hours)</div>
+    <div class="legend-item"><span class="legend-bar" style="background:#7ee787;"></span>Service ticket (hours)</div>
+    <div class="legend-item"><span class="legend-bar" style="background:#f1c40f;"></span>Mon↔OSD shared secret</div>
+  </div>
+</div>
+
+<script>
+let step = 0;
+let autoPlaying = false;
+
+const steps = [
+  // ====== PHASE 0: SETUP ======
+  {
+    phase: 0,
+    title: "Phase 0 — Setup",
+    body: "Admin runs <code>ceph auth get-or-create-key client.alice</code> on the cluster. The monitor's auth subsystem will generate Alice's username and a permanent secret key.",
+    highlight: ['mon'],
+    msgs: [{ from: 'admin', to: 'mon', text: 'ceph auth get-or-create-key client.alice', encrypted: false }],
+    attacker: 'CLI command on admin host — not on the wire yet.',
+  },
+  {
+    phase: 0,
+    title: "Monitor generates Alice's key",
+    body: "The monitor creates a fresh random secret <code>K_alice</code> and stores it in its auth database alongside username <code>client.alice</code>. <strong>This key never leaves the cluster except to be delivered once to Alice.</strong>",
+    highlight: ['mon'],
+    addKey: { actor: 'mon', key: { cls: 'permanent', icon: '🔑', label: 'client.alice', val: 'K_alice = a3f9...' } },
+    attacker: 'Still nothing on the wire.',
+  },
+  {
+    phase: 0,
+    title: "Admin securely delivers the key to Alice",
+    body: "The admin copies the keyring file to Alice <strong>out of band</strong> — over SSH, encrypted email, a sealed envelope. <strong>Never plaintext over an untrusted channel</strong> — this is the one moment the key crosses a network, and it must be secured by other means.",
+    highlight: ['client'],
+    addKey: { actor: 'client', key: { cls: 'permanent', icon: '🔑', label: 'My secret', val: 'K_alice = a3f9...' } },
+    attacker: '(If admin used an insecure channel here, attacker wins. After this point, the key never travels again.)',
+  },
+
+  // ====== PHASE 1: AUTHENTICATE ======
+  {
+    phase: 1,
+    title: "Phase 1 — Alice authenticates",
+    body: "Alice's client contacts any monitor and says: <em>\"I am client.alice — I want a session.\"</em> Notice she sends only her <strong>username</strong>, never her key.",
+    highlight: ['client', 'mon'],
+    msgs: [{ from: 'client', to: 'mon', text: 'AUTH_REQUEST: user=client.alice', encrypted: false }],
+    attacker: 'Sees: <code>AUTH_REQUEST: user=client.alice</code> — knows someone named alice wants to connect. No key material.',
+  },
+  {
+    phase: 1,
+    title: "Monitor generates a session key",
+    body: "The monitor looks up <code>K_alice</code> in its database, then generates a fresh random <strong>session key</strong> <code>K_sess</code>. This will be Alice's working key for the next few hours — she'll use it to request service tickets without re-proving her identity every time.",
+    highlight: ['mon'],
+    addKey: { actor: 'mon', key: { cls: 'session', icon: '🎟️', label: 'session for alice', val: 'K_sess = bc12...' } },
+    attacker: 'Still just the username request from the previous step.',
+  },
+  {
+    phase: 1,
+    title: "Monitor encrypts session key with K_alice",
+    body: "Here's the magic. The monitor encrypts <code>K_sess</code> using Alice's permanent key <code>K_alice</code>. <strong>Only someone who has K_alice can decrypt this.</strong> The monitor sends the encrypted blob to Alice.",
+    highlight: ['mon', 'client'],
+    msgs: [{ from: 'mon', to: 'client', text: '🔒 Encrypt(K_alice, K_sess) = e8a2c1f9...', encrypted: true }],
+    attacker: 'Sees: <span class="ciphertext">e8a2c1f9b4d7...</span> — pure ciphertext. Attacker doesn\'t have K_alice, can\'t decrypt. Also can\'t replay it because the next session will use a fresh K_sess.',
+  },
+  {
+    phase: 1,
+    title: "Alice decrypts to recover K_sess",
+    body: "Alice uses her permanent key <code>K_alice</code> to decrypt the blob → now she has <code>K_sess</code>. Both parties now know K_sess, but it was <strong>never transmitted in the clear</strong>. This is what \"shared secret authentication\" means in practice.",
+    highlight: ['client'],
+    addKey: { actor: 'client', key: { cls: 'session', icon: '🎟️', label: 'my session', val: 'K_sess = bc12...' } },
+    attacker: 'Still seeing only the ciphertext from before — has no idea what K_sess is.',
+  },
+
+  // ====== PHASE 2: GET TICKET ======
+  {
+    phase: 2,
+    title: "Phase 2 — Alice requests a ticket for OSDs",
+    body: "Alice wants to read data, which means talking to OSDs. She asks the monitor for an <strong>OSD service ticket</strong>, signing the request with K_sess to prove she's the authenticated session.",
+    highlight: ['client', 'mon'],
+    msgs: [{ from: 'client', to: 'mon', text: '🔒 Sign(K_sess): GET_TICKET service=osd', encrypted: true }],
+    attacker: 'Sees signed-but-not-encrypted request. Can\'t forge it (no K_sess) and can\'t modify it without breaking the signature.',
+  },
+  {
+    phase: 2,
+    title: "Monitor mints the ticket",
+    body: "Monitor creates a ticket containing <code>{user: alice, caps: rw, expires_at: T+1h}</code>. It encrypts the ticket with <code>K_mo</code> — the secret it shares with every OSD. <strong>Alice will carry this ticket but can't open it</strong> — it's for the OSDs to read.",
+    highlight: ['mon'],
+    msgs: [{ from: 'mon', to: 'client', text: '🔒 Ticket = Encrypt(K_mo, {alice, rw, exp:T+1h})', encrypted: true, ticket: true }],
+    attacker: 'Sees another ciphertext blob. Doesn\'t have K_mo (it lives only inside the cluster), can\'t read or forge tickets.',
+  },
+  {
+    phase: 2,
+    title: "Alice receives the ticket",
+    body: "Alice stores the ticket. She can't decrypt it (it's not encrypted for her), but that's fine — she just needs to <strong>present</strong> it. Think of it like a sealed envelope addressed to the OSD: Alice carries it but the contents are for the OSD only.",
+    highlight: ['client'],
+    addKey: { actor: 'client', key: { cls: 'ticket', icon: '🎫', label: 'osd ticket (sealed)', val: 'exp T+1h' } },
+    attacker: 'No new traffic.',
+  },
+
+  // ====== PHASE 3: USE SERVICE ======
+  {
+    phase: 3,
+    title: "Phase 3 — Alice reads an object",
+    body: "Alice contacts an OSD with her read request <strong>and the ticket</strong>. The OSD has never spoken to Alice before, but it doesn't need to — the ticket is its proof.",
+    highlight: ['client', 'osd'],
+    msgs: [{ from: 'client', to: 'osd', text: 'READ obj=photo.jpg + 🎫 ticket', encrypted: true, ticket: true }],
+    attacker: 'Sees read request and the encrypted ticket. Can\'t steal the ticket and reuse it from a different IP — Ceph binds tickets to additional context.',
+  },
+  {
+    phase: 3,
+    title: "OSD verifies the ticket",
+    body: "The OSD decrypts the ticket using <code>K_mo</code> (the shared secret it has with monitors). It checks: <strong>(1)</strong> signature valid? <strong>(2)</strong> not expired? <strong>(3)</strong> does Alice have the right capability for this op? <strong>No callback to monitors needed</strong> — the shared secret makes the ticket self-validating.",
+    highlight: ['osd'],
+    attacker: 'No new traffic.',
+  },
+  {
+    phase: 3,
+    title: "OSD serves the data",
+    body: "All checks pass — OSD reads <code>photo.jpg</code> and returns it. Alice has read her data without her permanent key ever leaving her laptop and without the OSD ever talking to the monitor.",
+    highlight: ['osd', 'client'],
+    msgs: [{ from: 'osd', to: 'client', text: 'OBJECT_DATA: <photo.jpg bytes>', encrypted: false }],
+    attacker: '⚠️ <strong>Sees the actual object data in the clear!</strong> cephx authenticates but does <strong>not</strong> encrypt traffic. For that, you need <code>ms_cluster_mode=secure</code> (msgr2).',
+  },
+
+  // ====== PHASE 4: EXPIRATION ======
+  {
+    phase: 4,
+    title: "Phase 4 — Time passes, the ticket expires",
+    body: "An hour later, the ticket's expiration time has passed. Even if an attacker somehow captured the ticket earlier, it's now useless. Alice's client automatically requests a new ticket using K_sess (still valid). If K_sess also expires, she re-authenticates with K_alice. This <strong>limits the blast radius</strong> of any captured credential.",
+    highlight: ['client'],
+    expireKey: 'ticket',
+    attacker: 'A captured ticket from an hour ago is now rejected by every OSD. Replay attack defeated.',
+  },
+];
+
+// ====== State ======
+const keyStore = { client: [], mon: [], osd: [] };
+let lastAttackerLog = [];
+
+function setKeys(actor, html) {
+  document.getElementById(actor + '-keys').innerHTML = html || '<div style="font-size:11px; color:#8b949e; font-style:italic;">(empty)</div>';
+}
+
+function keyHTML(k, fresh = false, expired = false) {
+  return `<div class="key ${k.cls}${fresh ? ' fresh' : ''}${expired ? ' expired' : ''}">
+    <span class="key-icon">${k.icon}</span>
+    <span class="key-label">${k.label}</span>
+    <span class="key-val">${k.val}</span>
+  </div>`;
+}
+
+function renderKeys() {
+  ['client', 'mon', 'osd'].forEach(a => {
+    const html = keyStore[a].map(k => keyHTML(k.key, false, k.expired)).join('');
+    if (html) setKeys(a, html);
+    else setKeys(a, '');
+  });
+}
+
+function clearHighlights() {
+  document.querySelectorAll('.actor').forEach(a => a.classList.remove('highlight'));
+}
+
+function clearMessages() {
+  document.getElementById('msgs').innerHTML = '';
+}
+
+function showMessage(msg) {
+  const layer = document.getElementById('msgs');
+  const el = document.createElement('div');
+  el.className = 'message' + (msg.encrypted ? ' encrypted' : '') + (msg.ticket ? ' ticket' : '');
+
+  // Position based on from/to
+  const positions = {
+    'client-mon': { top: '40%', left: '32%', transform: 'translate(0, -50%)' },
+    'mon-client': { top: '55%', left: '32%', transform: 'translate(0, -50%)' },
+    'mon-osd': { top: '40%', left: '65%', transform: 'translate(0, -50%)' },
+    'osd-mon': { top: '55%', left: '65%', transform: 'translate(0, -50%)' },
+    'client-osd': { top: '70%', left: '32%', transform: 'translate(0, -50%)', width: 'calc(60% - 32px)' },
+    'osd-client': { top: '85%', left: '32%', transform: 'translate(0, -50%)', width: 'calc(60% - 32px)' },
+    'admin-mon': { top: '40%', left: '32%', transform: 'translate(0, -50%)' },
+  };
+  const key = msg.from + '-' + msg.to;
+  const pos = positions[key] || { top: '50%', left: '32%' };
+  Object.assign(el.style, pos);
+  if (pos.width) el.style.width = pos.width;
+
+  el.innerHTML = `
+    <div class="msg-from">${msg.from} → ${msg.to}</div>
+    <div class="msg-body">${msg.text}</div>
+  `;
+  layer.appendChild(el);
+}
+
+function render() {
+  const s = steps[step];
+  if (!s) return;
+
+  // Phase pills
+  document.querySelectorAll('.phase-pill').forEach(p => {
+    const ph = parseInt(p.dataset.phase);
+    p.classList.toggle('active', ph === s.phase);
+    p.classList.toggle('done', ph < s.phase);
+  });
+
+  // Explainer
+  document.getElementById('exp-title').textContent = s.title;
+  document.getElementById('exp-body').innerHTML = s.body;
+
+  // Highlights
+  clearHighlights();
+  if (s.highlight) s.highlight.forEach(a => {
+    document.getElementById('actor-' + a)?.classList.add('highlight');
+  });
+
+  // Keys
+  if (s.addKey) {
+    // Mark as fresh just for this render
+    const existing = keyStore[s.addKey.actor].find(k => k.key.val === s.addKey.key.val);
+    if (!existing) {
+      keyStore[s.addKey.actor].push({ key: s.addKey.key, expired: false });
+      renderKeys();
+      // Apply fresh class to last key
+      const container = document.getElementById(s.addKey.actor + '-keys');
+      const last = container.querySelector('.key:last-child');
+      if (last) last.classList.add('fresh');
+    }
+  }
+
+  if (s.expireKey) {
+    keyStore.client.forEach(k => {
+      if (k.key.cls === s.expireKey) k.expired = true;
+    });
+    renderKeys();
+  }
+
+  // Messages
+  clearMessages();
+  if (s.msgs) s.msgs.forEach(m => showMessage(m));
+
+  // Attacker
+  document.getElementById('attacker').innerHTML = s.attacker || '(no traffic this step)';
+
+  // Counter & progress
+  document.getElementById('counter').textContent = `${step + 1} / ${steps.length}`;
+  document.getElementById('progress').style.width = `${((step + 1) / steps.length) * 100}%`;
+  document.getElementById('prev-btn').disabled = step === 0;
+  document.getElementById('next-btn').disabled = step === steps.length - 1;
+}
+
+function next() {
+  if (step < steps.length - 1) {
+    step++;
+    render();
+  }
+}
+
+function prev() {
+  if (step > 0) {
+    step--;
+    // Rebuild key state from scratch by replaying
+    keyStore.client = [];
+    keyStore.mon = [];
+    keyStore.osd = [];
+    for (let i = 0; i <= step; i++) {
+      const s = steps[i];
+      if (s.addKey) {
+        const existing = keyStore[s.addKey.actor].find(k => k.key.val === s.addKey.key.val);
+        if (!existing) keyStore[s.addKey.actor].push({ key: s.addKey.key, expired: false });
+      }
+      if (s.expireKey) {
+        keyStore.client.forEach(k => {
+          if (k.key.cls === s.expireKey) k.expired = true;
+        });
+      }
+    }
+    renderKeys();
+    render();
+  }
+}
+
+function reset() {
+  step = 0;
+  autoPlaying = false;
+  document.getElementById('play-btn').textContent = '▶ Auto-play';
+  keyStore.client = [];
+  keyStore.mon = [];
+  keyStore.osd = [];
+  renderKeys();
+  render();
+}
+
+function autoPlay() {
+  if (autoPlaying) {
+    autoPlaying = false;
+    document.getElementById('play-btn').textContent = '▶ Auto-play';
+    return;
+  }
+  autoPlaying = true;
+  document.getElementById('play-btn').textContent = '⏸ Pause';
+  const tick = () => {
+    if (!autoPlaying) return;
+    if (step < steps.length - 1) {
+      next();
+      setTimeout(tick, 2800);
+    } else {
+      autoPlaying = false;
+      document.getElementById('play-btn').textContent = '▶ Auto-play';
+    }
+  };
+  tick();
+}
+
+// Init monitor's auth db
+keyStore.mon.push({ key: { cls: 'shared', icon: '🔗', label: 'mon↔osd shared', val: 'K_mo' }, expired: false });
+keyStore.osd.push({ key: { cls: 'shared', icon: '🔗', label: 'mon↔osd shared', val: 'K_mo' }, expired: false });
+renderKeys();
+render();
+</script>
+</body>
+</html>
