@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ceph Replication & EC Visualizer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0d1117; color: #e6edf3; padding: 24px; line-height: 1.5;
+  }
+  .app { max-width: 1300px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; color: #58a6ff; }
+  .subtitle { color: #8b949e; font-size: 14px; margin-bottom: 24px; }
+
+  .panel {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 18px; margin-bottom: 16px;
+  }
+  .panel-title {
+    font-size: 12px; color: #58a6ff; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 600; margin-bottom: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel-title .hint { font-size: 11px; color: #8b949e; font-weight: normal; text-transform: none; }
+
+  /* Mode toggle */
+  .mode-toggle {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px;
+  }
+  .mode-btn {
+    background: #0d1117; border: 2px solid #30363d; border-radius: 8px;
+    padding: 14px; cursor: pointer; text-align: center; transition: all 0.2s;
+  }
+  .mode-btn:hover { border-color: #58a6ff; }
+  .mode-btn.active {
+    border-color: #f1c40f; background: #1f1a07;
+    box-shadow: 0 0 16px rgba(241, 196, 15, 0.2);
+  }
+  .mode-btn .icon { font-size: 24px; }
+  .mode-btn .name {
+    font-weight: 700; color: #c9d1d9; margin-top: 4px; font-size: 14px;
+  }
+  .mode-btn .desc {
+    font-size: 11px; color: #8b949e; margin-top: 4px;
+  }
+
+  /* Config sliders */
+  .slider-row { margin-bottom: 12px; }
+  .slider-row label {
+    display: flex; justify-content: space-between; margin-bottom: 4px;
+    font-size: 12px; color: #8b949e;
+  }
+  .slider-row .value {
+    color: #c9d1d9; font-family: 'SF Mono', Consolas, monospace; font-size: 13px;
+    font-weight: 600;
+  }
+  input[type="range"] { width: 100%; accent-color: #58a6ff; }
+
+  /* EC profile picker */
+  .ec-profiles {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+  }
+  .ec-profile {
+    background: #0d1117; border: 2px solid #30363d; border-radius: 6px;
+    padding: 8px; cursor: pointer; text-align: center; transition: all 0.2s;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .ec-profile:hover { border-color: #58a6ff; }
+  .ec-profile.active { border-color: #f1c40f; background: #1f1a07; }
+  .ec-profile .km { font-size: 14px; font-weight: 700; color: #c9d1d9; }
+  .ec-profile .info { font-size: 9px; color: #8b949e; margin-top: 2px; }
+
+  /* Layout */
+  .grid {
+    display: grid; grid-template-columns: 1fr 350px; gap: 16px;
+  }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+
+  /* Scene */
+  .scene {
+    position: relative; min-height: 380px;
+    background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+    padding: 18px; overflow: hidden;
+  }
+  .client {
+    position: absolute; left: 20px; top: 50%; transform: translateY(-50%);
+    background: #161b22; border: 2px solid #30363d; border-radius: 8px;
+    padding: 12px 14px; width: 140px; text-align: center;
+    transition: all 0.3s;
+  }
+  .client.active {
+    border-color: #f1c40f; box-shadow: 0 0 18px rgba(241, 196, 15, 0.3);
+  }
+  .client-icon { font-size: 28px; }
+  .client-name { font-size: 12px; font-weight: 600; margin-top: 4px; color: #c9d1d9; }
+  .client-bw {
+    font-size: 10px; color: #7ee787; margin-top: 4px;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+
+  .osds-area {
+    position: absolute; left: 200px; right: 20px; top: 18px; bottom: 18px;
+  }
+  .osd {
+    background: #161b22; border: 2px solid #30363d; border-radius: 8px;
+    padding: 10px 12px; transition: all 0.3s; position: absolute;
+    width: calc(50% - 8px); display: grid; grid-template-columns: auto 1fr; gap: 10px;
+    align-items: center;
+  }
+  .osd-icon {
+    width: 40px; height: 40px; border-radius: 6px;
+    background: #21262d; display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .osd.primary .osd-icon { background: #1a2e1a; }
+  .osd.secondary .osd-icon { background: #0a1e3d; }
+  .osd-content { font-family: 'SF Mono', Consolas, monospace; }
+  .osd-name {
+    font-size: 13px; font-weight: 700; color: #c9d1d9; margin-bottom: 2px;
+  }
+  .osd-badge {
+    font-size: 9px; padding: 1px 6px; border-radius: 8px; display: inline-block;
+    background: #21262d; color: #8b949e;
+  }
+  .osd.primary .osd-badge { background: #1a2e1a; color: #7ee787; }
+  .osd.secondary .osd-badge { background: #0a1e3d; color: #58a6ff; }
+  .osd-data {
+    font-size: 10px; color: #8b949e; margin-top: 4px;
+    min-height: 12px;
+  }
+  .osd-data .has-data { color: #7ee787; }
+  .osd-data .chunk { color: #d2a8ff; }
+
+  .osd.active {
+    border-color: #f1c40f;
+    box-shadow: 0 0 14px rgba(241, 196, 15, 0.4);
+  }
+  .osd.failed {
+    border-color: #f85149; background: #2d0a0a; opacity: 0.5;
+  }
+
+  .msg-layer { position: absolute; inset: 0; pointer-events: none; }
+  .msg {
+    position: absolute; background: #1f2937; border: 1px solid #58a6ff;
+    border-radius: 6px; padding: 5px 10px;
+    font-family: 'SF Mono', Consolas, monospace; font-size: 10px;
+    color: #c9d1d9; max-width: 200px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    animation: msgFly 0.5s ease;
+  }
+  .msg.write { border-color: #7ee787; color: #7ee787; }
+  .msg.ack { border-color: #d2a8ff; color: #d2a8ff; }
+  @keyframes msgFly {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Status / Explainer */
+  .health-banner {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: 10px 14px; margin-bottom: 12px; display: flex;
+    justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+  }
+  .health-banner.ok { border-left: 4px solid #7ee787; }
+  .health-banner.warn { border-left: 4px solid #f1c40f; }
+  .health-banner.bad { border-left: 4px solid #f85149; }
+  .health-banner.crit { border-left: 4px solid #da3633; background: #2d0a0a; }
+  .health-status {
+    font-weight: 700; font-family: 'SF Mono', Consolas, monospace;
+  }
+  .health-status.ok { color: #7ee787; }
+  .health-status.warn { color: #f1c40f; }
+  .health-status.bad { color: #f85149; }
+  .health-detail { font-size: 12px; color: #8b949e; }
+
+  /* Actions */
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    background: #238636; color: white; border: none; padding: 8px 14px;
+    border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500;
+  }
+  button:hover { background: #2ea043; }
+  button.secondary { background: #21262d; border: 1px solid #30363d; color: #e6edf3; }
+  button.secondary:hover { background: #30363d; }
+  button.danger { background: #21262d; border: 1px solid #f85149; color: #f85149; }
+  button.danger:hover { background: #2d0a0a; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Trace */
+  .trace {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: 12px; font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px; max-height: 320px; overflow-y: auto;
+  }
+  .trace-line {
+    padding: 5px 0; border-bottom: 1px dashed #21262d; color: #c9d1d9;
+    line-height: 1.5;
+  }
+  .trace-line:last-child { border-bottom: none; }
+  .trace-line .step { color: #58a6ff; font-weight: 600; }
+  .trace-line .hl { color: #f1c40f; }
+  .trace-line .ok { color: #7ee787; }
+  .trace-line .err { color: #f85149; }
+  .trace-empty {
+    color: #8b949e; font-style: italic; padding: 20px; text-align: center;
+  }
+
+  /* Comparison table */
+  .compare-table {
+    width: 100%; font-family: 'SF Mono', Consolas, monospace; font-size: 12px;
+    border-collapse: collapse;
+  }
+  .compare-table th {
+    text-align: left; padding: 8px 10px; background: #0d1117;
+    color: #58a6ff; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.5px; border-bottom: 1px solid #21262d;
+  }
+  .compare-table td {
+    padding: 8px 10px; border-bottom: 1px solid #21262d;
+    color: #c9d1d9;
+  }
+  .compare-table tr.highlight td { background: #1f1a07; color: #f1c40f; }
+  .compare-table .ok { color: #7ee787; }
+  .compare-table .warn { color: #f1c40f; }
+  .compare-table .bad { color: #f85149; }
+
+  /* Pool config display */
+  .config-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; background: #0d1117; border-radius: 4px;
+    margin-bottom: 4px; font-family: 'SF Mono', Consolas, monospace; font-size: 12px;
+  }
+  .config-row .key { color: #8b949e; }
+  .config-row .val { color: #c9d1d9; font-weight: 600; }
+  .config-row .val.warn { color: #f1c40f; }
+  .config-row .val.bad { color: #f85149; }
+  .config-row .val.good { color: #7ee787; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>📑 Replication & Erasure Coding — How Ceph Stores Multiple Copies</h1>
+  <p class="subtitle">Watch the primary OSD coordinate writes on the client's behalf. Toggle between replication and EC. Fail OSDs and see when writes get blocked (vs degraded).</p>
+
+  <div class="grid">
+    <!-- LEFT: Scene & actions -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">⚙️ Pool Durability Mode</div>
+        <div class="mode-toggle">
+          <div class="mode-btn active" id="mode-repl" onclick="setMode('replication')">
+            <div class="icon">📑</div>
+            <div class="name">Replicated</div>
+            <div class="desc">N full copies (3× storage for size=3)</div>
+          </div>
+          <div class="mode-btn" id="mode-ec" onclick="setMode('erasure')">
+            <div class="icon">🧩</div>
+            <div class="name">Erasure Coded</div>
+            <div class="desc">k data + m parity chunks</div>
+          </div>
+        </div>
+
+        <!-- Replication config -->
+        <div id="repl-config">
+          <div class="slider-row">
+            <label>size (replicas Ceph wants) <span class="value" id="v-size">3</span></label>
+            <input type="range" id="r-size" min="2" max="5" value="3" oninput="updateConfig()">
+          </div>
+          <div class="slider-row">
+            <label>min_size (replicas needed to write) <span class="value" id="v-minsize">2</span></label>
+            <input type="range" id="r-minsize" min="1" max="5" value="2" oninput="updateConfig()">
+          </div>
+          <div class="config-row">
+            <span class="key">storage overhead</span>
+            <span class="val" id="repl-overhead">3.0×</span>
+          </div>
+          <div class="config-row">
+            <span class="key">survives</span>
+            <span class="val" id="repl-survives">2 failures</span>
+          </div>
+        </div>
+
+        <!-- EC config -->
+        <div id="ec-config" style="display:none;">
+          <div style="font-size:12px; color:#8b949e; margin-bottom:8px;">
+            Supported jerasure profiles (from the docs):
+          </div>
+          <div class="ec-profiles">
+            <div class="ec-profile" data-k="4" data-m="2" onclick="setEC(4,2)">
+              <div class="km">k=4, m=2</div>
+              <div class="info">6 chunks · 1.5×</div>
+            </div>
+            <div class="ec-profile active" data-k="8" data-m="3" onclick="setEC(8,3)">
+              <div class="km">k=8, m=3</div>
+              <div class="info">11 chunks · 1.375×</div>
+            </div>
+            <div class="ec-profile" data-k="8" data-m="4" onclick="setEC(8,4)">
+              <div class="km">k=8, m=4</div>
+              <div class="info">12 chunks · 1.5×</div>
+            </div>
+          </div>
+          <div class="config-row" style="margin-top:12px;">
+            <span class="key">storage overhead</span>
+            <span class="val" id="ec-overhead">1.375×</span>
+          </div>
+          <div class="config-row">
+            <span class="key">survives</span>
+            <span class="val" id="ec-survives">3 failures</span>
+          </div>
+          <div class="config-row">
+            <span class="key">min chunks to read</span>
+            <span class="val" id="ec-minchunks">8</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">
+          <span>🎬 Write Scenario</span>
+          <span class="hint">Click OSDs to fail/restore them</span>
+        </div>
+        <div class="health-banner" id="health">
+          <div>
+            <span class="health-status ok">HEALTH_OK</span>
+            <span class="health-detail" id="health-detail">— all OSDs up, writes accepted</span>
+          </div>
+        </div>
+        <div class="scene" id="scene">
+          <div class="client" id="client">
+            <div class="client-icon">💻</div>
+            <div class="client-name">Client</div>
+            <div class="client-bw" id="client-bw">1× data out</div>
+          </div>
+          <div class="osds-area" id="osds-area"></div>
+          <div class="msg-layer" id="msgs"></div>
+        </div>
+
+        <div class="actions" style="margin-top:14px;">
+          <button onclick="writeObject()">▶ Write Object "foo"</button>
+          <button class="secondary" onclick="restoreAll()">↻ Restore All</button>
+          <button class="danger" onclick="failPrimary()">⚡ Fail Primary</button>
+          <button class="danger" onclick="failRandom()">⚡ Fail Random OSD</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: trace + comparison -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">📜 Write Trace</div>
+        <div class="trace" id="trace">
+          <div class="trace-empty">Click "Write Object" to see the replication protocol play out.</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">⚖️ Comparison</div>
+        <table class="compare-table">
+          <thead>
+            <tr><th>Mode</th><th>Overhead</th><th>Survives</th></tr>
+          </thead>
+          <tbody id="compare-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let mode = 'replication';
+let pool = { size: 3, min_size: 2, k: 8, m: 3 };
+let osds = []; // populated based on mode
+
+function rebuildOSDs() {
+  const count = mode === 'replication' ? pool.size : pool.k + pool.m;
+  osds = [];
+  // Start IDs at 5 (matches doc style: osd.5, osd.10, osd.15 for replication)
+  for (let i = 0; i < count; i++) {
+    osds.push({
+      id: mode === 'replication' ? [5, 10, 15, 20, 25][i] || (10 + i) : i,
+      failed: false,
+      hasData: false,
+      chunkType: mode === 'erasure' ? (i < pool.k ? 'D' + i : 'P' + (i - pool.k)) : null,
+      isPrimary: i === 0,
+    });
+  }
+  render();
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('mode-repl').classList.toggle('active', m === 'replication');
+  document.getElementById('mode-ec').classList.toggle('active', m === 'erasure');
+  document.getElementById('repl-config').style.display = m === 'replication' ? 'block' : 'none';
+  document.getElementById('ec-config').style.display = m === 'erasure' ? 'block' : 'none';
+  rebuildOSDs();
+}
+
+function setEC(k, m) {
+  pool.k = k;
+  pool.m = m;
+  document.querySelectorAll('.ec-profile').forEach(el => {
+    el.classList.toggle('active', parseInt(el.dataset.k) === k && parseInt(el.dataset.m) === m);
+  });
+  document.getElementById('ec-overhead').textContent = ((k + m) / k).toFixed(3) + '×';
+  document.getElementById('ec-survives').textContent = `${m} failures`;
+  document.getElementById('ec-minchunks').textContent = k;
+  rebuildOSDs();
+}
+
+function updateConfig() {
+  pool.size = parseInt(document.getElementById('r-size').value);
+  pool.min_size = Math.min(pool.size, parseInt(document.getElementById('r-minsize').value));
+  if (parseInt(document.getElementById('r-minsize').value) > pool.size) {
+    document.getElementById('r-minsize').value = pool.size;
+  }
+  document.getElementById('v-size').textContent = pool.size;
+  document.getElementById('v-minsize').textContent = pool.min_size;
+  document.getElementById('repl-overhead').textContent = pool.size.toFixed(1) + '×';
+  document.getElementById('repl-survives').textContent = `${pool.size - 1} failures`;
+  rebuildOSDs();
+}
+
+function render() {
+  const area = document.getElementById('osds-area');
+  area.innerHTML = '';
+  // Grid layout
+  const n = osds.length;
+  const cols = n <= 4 ? 2 : (n <= 6 ? 3 : 4);
+  const rows = Math.ceil(n / cols);
+  osds.forEach((o, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const w = 100 / cols;
+    const h = 100 / rows;
+    const el = document.createElement('div');
+    el.className = 'osd' + (o.failed ? ' failed' : '') + (o.active ? ' active' : '') +
+                   (o.isPrimary ? ' primary' : ' secondary');
+    el.style.left = `calc(${col * w}% + 4px)`;
+    el.style.top = `calc(${row * h}% + 4px)`;
+    el.style.width = `calc(${w}% - 8px)`;
+    el.style.height = `calc(${h}% - 8px)`;
+    el.dataset.idx = i;
+    el.innerHTML = `
+      <div class="osd-icon">${o.isPrimary ? '🏛️' : '💾'}</div>
+      <div class="osd-content">
+        <div class="osd-name">osd.${o.id}</div>
+        <span class="osd-badge">${o.isPrimary ? 'PRIMARY' : (mode === 'erasure' ? o.chunkType : 'replica')}</span>
+        <div class="osd-data">${o.hasData ? `<span class="${mode === 'erasure' ? 'chunk' : 'has-data'}">${mode === 'erasure' ? 'chunk ' + o.chunkType : '✓ foo'}</span>` : '(empty)'}</div>
+      </div>
+    `;
+    el.addEventListener('click', () => toggleOSD(i));
+    area.appendChild(el);
+  });
+
+  updateHealth();
+  renderComparison();
+}
+
+function toggleOSD(i) {
+  osds[i].failed = !osds[i].failed;
+  render();
+}
+
+function failPrimary() {
+  if (osds[0]) {
+    osds[0].failed = true;
+    render();
+  }
+}
+
+function failRandom() {
+  const up = osds.map((o, i) => ({ o, i })).filter(x => !x.o.failed);
+  if (up.length === 0) return;
+  const t = up[Math.floor(Math.random() * up.length)];
+  osds[t.i].failed = true;
+  render();
+}
+
+function restoreAll() {
+  osds.forEach(o => o.failed = false);
+  render();
+}
+
+function updateHealth() {
+  const up = osds.filter(o => !o.failed).length;
+  const total = osds.length;
+  const required = mode === 'replication' ? pool.min_size : pool.k;
+  const wanted = mode === 'replication' ? pool.size : pool.k + pool.m;
+
+  const banner = document.getElementById('health');
+  const status = banner.querySelector('.health-status');
+  const detail = document.getElementById('health-detail');
+  banner.className = 'health-banner';
+
+  if (up === total) {
+    banner.classList.add('ok');
+    status.className = 'health-status ok';
+    status.textContent = 'HEALTH_OK';
+    detail.textContent = mode === 'replication'
+      ? `— ${up}/${total} replicas up, writes & reads OK (active+clean)`
+      : `— ${up}/${total} chunks up, writes & reads OK (active+clean)`;
+  } else if (up >= required) {
+    const fc = total - up;
+    banner.classList.add('warn');
+    status.className = 'health-status warn';
+    status.textContent = 'HEALTH_WARN';
+    detail.textContent = mode === 'replication'
+      ? `— ${fc} replica(s) down, but ${up} ≥ min_size (${pool.min_size}). Writes OK, degraded. Recovering in background.`
+      : `— ${fc} chunk(s) lost, but ${up} ≥ k (${pool.k}). Object still rebuildable. Reads OK, degraded.`;
+  } else if (up > 0) {
+    banner.classList.add('bad');
+    status.className = 'health-status bad';
+    status.textContent = 'HEALTH_ERR';
+    detail.textContent = mode === 'replication'
+      ? `— ${total - up} replicas down, only ${up} left (below min_size=${pool.min_size}). ❌ WRITES BLOCKED. Reads may still work.`
+      : `— Lost ${total - up} chunks, only ${up} left (need k=${pool.k}). ❌ OBJECT UNRECOVERABLE until OSDs return.`;
+  } else {
+    banner.classList.add('crit');
+    status.className = 'health-status bad';
+    status.textContent = 'HEALTH_CRIT';
+    detail.textContent = '— No OSDs available. Total data loss until OSDs return.';
+  }
+}
+
+function renderComparison() {
+  const body = document.getElementById('compare-body');
+  const rows = [
+    { mode: 'repl', label: 'size=2 replicated', overhead: '2.0×', survives: 1, hl: false },
+    { mode: 'repl', label: 'size=3 replicated (default)', overhead: '3.0×', survives: 2, hl: false },
+    { mode: 'repl', label: 'size=4 replicated', overhead: '4.0×', survives: 3, hl: false },
+    { mode: 'ec', label: 'EC k=4, m=2', overhead: '1.5×', survives: 2, hl: false },
+    { mode: 'ec', label: 'EC k=8, m=3', overhead: '1.375×', survives: 3, hl: false },
+    { mode: 'ec', label: 'EC k=8, m=4', overhead: '1.5×', survives: 4, hl: false },
+  ];
+  // Highlight current
+  if (mode === 'replication') {
+    rows.forEach(r => { if (r.label.includes(`size=${pool.size}`)) r.hl = true; });
+  } else {
+    rows.forEach(r => { if (r.label.includes(`k=${pool.k}, m=${pool.m}`)) r.hl = true; });
+  }
+  body.innerHTML = rows.map(r =>
+    `<tr class="${r.hl ? 'highlight' : ''}">
+      <td>${r.label}</td>
+      <td>${r.overhead}</td>
+      <td>${r.survives}</td>
+    </tr>`
+  ).join('');
+}
+
+// ============ Write animation ============
+function addTrace(html) {
+  const t = document.getElementById('trace');
+  if (t.querySelector('.trace-empty')) t.innerHTML = '';
+  const line = document.createElement('div');
+  line.className = 'trace-line';
+  line.innerHTML = html;
+  t.appendChild(line);
+  t.scrollTop = t.scrollHeight;
+}
+
+function clearTrace() {
+  document.getElementById('trace').innerHTML = '';
+}
+
+function clearMsgs() {
+  document.getElementById('msgs').innerHTML = '';
+}
+
+function showMsg(opts) {
+  const layer = document.getElementById('msgs');
+  const el = document.createElement('div');
+  el.className = 'msg ' + (opts.cls || '');
+  el.style.left = opts.left;
+  el.style.top = opts.top;
+  el.innerHTML = opts.text;
+  layer.appendChild(el);
+}
+
+async function writeObject() {
+  clearTrace();
+  clearMsgs();
+
+  const primary = osds[0];
+  if (!primary || primary.failed) {
+    addTrace('<span class="err">⚠ Primary OSD is down. Write would fail or be redirected after re-peering.</span>');
+    return;
+  }
+
+  // Step 1: client → primary
+  addTrace('<span class="step">[1]</span> Client computes CRUSH locally → contacts primary <span class="hl">osd.' + primary.id + '</span> with one write.');
+  document.getElementById('client').classList.add('active');
+  document.querySelector('[data-idx="0"]')?.classList.add('active');
+  showMsg({ cls: 'write', left: '170px', top: '50%', text: 'write foo' });
+  await sleep(700);
+
+  // Step 2: primary checks pool config
+  if (mode === 'replication') {
+    addTrace('<span class="step">[2]</span> Primary reads <span class="hl">osd_pool_default_size = ' + pool.size + '</span> from pool config. Needs to write to ' + (pool.size - 1) + ' replica(s).');
+  } else {
+    addTrace('<span class="step">[2]</span> Primary reads EC profile: <span class="hl">k=' + pool.k + ', m=' + pool.m + '</span>. Needs to encode + distribute ' + (pool.k + pool.m) + ' chunks.');
+  }
+  await sleep(700);
+
+  // Step 3: primary runs CRUSH for secondaries
+  addTrace('<span class="step">[3]</span> Primary runs CRUSH for this PG → secondary OSDs: [' +
+    osds.slice(1).map(o => 'osd.' + o.id).join(', ') + '] in <span class="hl">distinct failure domains</span>.');
+  await sleep(700);
+
+  // Step 4: encode (EC only)
+  if (mode === 'erasure') {
+    addTrace('<span class="step">[4]</span> Primary <span class="hl">encodes</span> object: splits into ' + pool.k + ' data chunks, computes ' + pool.m + ' parity chunks. CPU-intensive.');
+    await sleep(800);
+  }
+
+  // Step 5: primary writes to itself + forwards
+  const stepLabel = mode === 'erasure' ? '5' : '4';
+  if (mode === 'replication') {
+    addTrace('<span class="step">[' + stepLabel + ']</span> Primary writes object to its own local store, AND forwards full copies to secondaries: ' +
+      osds.slice(1).filter(o => !o.failed).map(o => 'osd.' + o.id).join(', '));
+  } else {
+    addTrace('<span class="step">[' + stepLabel + ']</span> Primary keeps its own chunk, distributes other ' + (osds.length - 1) + ' chunks to secondaries.');
+  }
+  primary.hasData = true;
+
+  // Animate forward
+  const cols = osds.length <= 4 ? 2 : (osds.length <= 6 ? 3 : 4);
+  for (let i = 1; i < osds.length; i++) {
+    if (osds[i].failed) continue;
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    showMsg({
+      cls: mode === 'erasure' ? 'write' : 'write',
+      left: `calc(200px + ${col * (100/cols)}% + 30px)`,
+      top: `calc(${row * (100/cols) * 0.6 + 20}px)`,
+      text: mode === 'erasure' ? `chunk ${osds[i].chunkType}` : 'replicate foo'
+    });
+    document.querySelector(`[data-idx="${i}"]`)?.classList.add('active');
+  }
+  render();
+  await sleep(1000);
+
+  // Step 6: secondaries ack
+  const ackStep = mode === 'erasure' ? '6' : '5';
+  const upSecondaries = osds.slice(1).filter(o => !o.failed);
+  upSecondaries.forEach(o => o.hasData = true);
+
+  if (upSecondaries.length < (mode === 'replication' ? pool.min_size - 1 : pool.k - 1)) {
+    addTrace('<span class="step">[' + ackStep + ']</span> <span class="err">⚠ Not enough OSDs acked! ' +
+      (mode === 'replication'
+        ? `Only ${upSecondaries.length + 1} replicas up, need min_size=${pool.min_size}. Write is held pending.`
+        : `Only ${upSecondaries.length + 1} chunks written, need at least k=${pool.k}.`) + '</span>');
+    render();
+    return;
+  }
+  addTrace('<span class="step">[' + ackStep + ']</span> Secondaries journal their writes and ack back to primary.');
+  await sleep(700);
+
+  // Step 7: primary acks client
+  const finalStep = mode === 'erasure' ? '7' : '6';
+  addTrace('<span class="step">[' + finalStep + ']</span> <span class="ok">Primary acks the client.</span> Write durable on ' +
+    (upSecondaries.length + 1) + ' OSDs.' +
+    (osds.some(o => o.failed) ? ' <span class="hl">PG enters degraded state — recovery starts in background.</span>' : ''));
+  showMsg({ cls: 'ack', left: '170px', top: '60%', text: 'ACK' });
+  render();
+  await sleep(700);
+
+  // Clear active states
+  document.getElementById('client').classList.remove('active');
+  osds.forEach(o => o.active = false);
+  render();
+
+  // Show final note about client bandwidth
+  if (mode === 'replication') {
+    addTrace('<span class="ok">✓</span> Client sent <span class="hl">1× data</span> (one write to primary). Primary spent <span class="hl">' + (pool.size - 1) + '× bandwidth</span> replicating internally. <em>Client bandwidth stays low even at high replication factors.</em>');
+  } else {
+    addTrace('<span class="ok">✓</span> Client sent <span class="hl">1× data</span>. Primary distributed (' + pool.k + '+' + pool.m + ')/k = <span class="hl">' + ((pool.k + pool.m) / pool.k).toFixed(2) + '× total bytes</span> across the cluster. Cheaper than replication.');
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Init
+rebuildOSDs();
+</script>
+</body>
+</html>
