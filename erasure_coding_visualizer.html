@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ceph Erasure Coding — NYAN Example</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0d1117; color: #e6edf3; padding: 24px; line-height: 1.5;
+  }
+  .app { max-width: 1300px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; color: #58a6ff; }
+  .subtitle { color: #8b949e; font-size: 14px; margin-bottom: 24px; }
+
+  .panel {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 18px; margin-bottom: 16px;
+  }
+  .panel-title {
+    font-size: 12px; color: #58a6ff; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 600; margin-bottom: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .hint { font-size: 11px; color: #8b949e; font-weight: normal; text-transform: none; }
+
+  /* Profile selector */
+  .profile-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+    margin-bottom: 12px;
+  }
+  .profile {
+    background: #0d1117; border: 2px solid #30363d; border-radius: 6px;
+    padding: 10px; text-align: center; cursor: pointer;
+    transition: all 0.2s;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .profile:hover { border-color: #58a6ff; }
+  .profile.active {
+    border-color: #f1c40f; background: #1f1a07;
+    box-shadow: 0 0 14px rgba(241, 196, 15, 0.2);
+  }
+  .profile .name {
+    font-size: 13px; font-weight: 700; color: #c9d1d9;
+  }
+  .profile .params { font-size: 10px; color: #d2a8ff; margin-top: 2px; }
+  .profile .info { font-size: 9px; color: #8b949e; margin-top: 4px; }
+
+  /* Object input */
+  .input-row {
+    display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px;
+    align-items: end; margin-bottom: 10px;
+  }
+  .input-group label {
+    display: block; font-size: 11px; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
+  }
+  .input-group input {
+    background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+    padding: 8px 10px; border-radius: 6px; font-size: 14px;
+    font-family: 'SF Mono', Consolas, monospace; width: 100%;
+  }
+  .input-group input:focus { border-color: #58a6ff; outline: none; }
+
+  /* Layout */
+  .grid {
+    display: grid; grid-template-columns: 1fr 340px; gap: 16px;
+  }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+
+  /* Encoding flow */
+  .encoding-flow {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 8px;
+    padding: 14px; margin-bottom: 16px;
+  }
+  .original-content {
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    padding: 14px; text-align: center; font-family: 'SF Mono', Consolas, monospace;
+    margin-bottom: 12px;
+  }
+  .content-label {
+    font-size: 10px; color: #8b949e; text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .content-value {
+    font-size: 24px; font-weight: 700; color: #c9d1d9; letter-spacing: 4px;
+  }
+  .content-value .padding { color: #8b949e; font-style: italic; }
+
+  .arrow-down {
+    text-align: center; color: #58a6ff; font-size: 20px; margin: 8px 0;
+  }
+  .split-step {
+    text-align: center; font-size: 11px; color: #8b949e;
+    margin-bottom: 8px;
+  }
+
+  .chunks-row {
+    display: grid; gap: 6px;
+  }
+  .chunk {
+    background: #0d1117; border: 2px solid #30363d; border-radius: 6px;
+    padding: 10px; text-align: center; transition: all 0.3s;
+    font-family: 'SF Mono', Consolas, monospace;
+    position: relative;
+  }
+  .chunk.data { border-color: #58a6ff; background: #0a1e3d; }
+  .chunk.parity { border-color: #d2a8ff; background: #1f1428; }
+  .chunk.local { border-color: #f1c40f; background: #1f1a07; }
+  .chunk-rank {
+    font-size: 9px; color: #8b949e; text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+  .chunk-value {
+    font-size: 16px; font-weight: 700;
+    letter-spacing: 1px;
+  }
+  .chunk.data .chunk-value { color: #58a6ff; }
+  .chunk.parity .chunk-value { color: #d2a8ff; }
+  .chunk.local .chunk-value { color: #f1c40f; }
+  .chunk-type {
+    font-size: 9px; color: #8b949e; margin-top: 2px;
+  }
+
+  /* OSD layout */
+  .osd-cluster {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .osd {
+    background: #161b22; border: 2px solid #30363d; border-radius: 8px;
+    padding: 10px; text-align: center; transition: all 0.3s;
+    cursor: pointer; position: relative;
+  }
+  .osd:hover { border-color: #58a6ff; }
+  .osd.failed {
+    border-color: #f85149; background: #2d0a0a; opacity: 0.5;
+  }
+  .osd.reading {
+    border-color: #f1c40f;
+    box-shadow: 0 0 14px rgba(241, 196, 15, 0.4);
+  }
+  .osd.reconstructed {
+    border-color: #7ee787;
+    animation: reconstructed 1.5s ease;
+  }
+  @keyframes reconstructed {
+    0% { box-shadow: 0 0 0 rgba(126, 231, 135, 0); }
+    50% { box-shadow: 0 0 20px rgba(126, 231, 135, 0.7); }
+    100% { box-shadow: 0 0 0 rgba(126, 231, 135, 0); }
+  }
+  .osd-name {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12px; font-weight: 700; color: #c9d1d9;
+  }
+  .osd-chunk {
+    background: #0d1117; border-radius: 4px;
+    padding: 6px 4px; margin-top: 6px;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px;
+  }
+  .osd-chunk .label {
+    font-size: 8px; color: #8b949e; text-transform: uppercase;
+  }
+  .osd-chunk .val { font-weight: 700; margin-top: 2px; letter-spacing: 1px; }
+  .osd-chunk.data .val { color: #58a6ff; }
+  .osd-chunk.parity .val { color: #d2a8ff; }
+  .osd-chunk.local .val { color: #f1c40f; }
+  .osd-status {
+    font-size: 9px; color: #8b949e; margin-top: 4px;
+  }
+  .osd-status.up { color: #7ee787; }
+  .osd-status.down { color: #f85149; }
+
+  /* Locality groups for LRC */
+  .locality-group {
+    background: rgba(241, 196, 15, 0.08);
+    border: 1px dashed #f1c40f; border-radius: 8px;
+    padding: 10px; margin-bottom: 8px;
+    position: relative;
+  }
+  .locality-group::before {
+    content: attr(data-label); position: absolute;
+    top: -8px; left: 12px; background: #161b22;
+    padding: 0 8px; font-size: 10px; color: #f1c40f;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+
+  /* Actions */
+  .actions {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px;
+  }
+  button {
+    background: #238636; color: white; border: none; padding: 8px 14px;
+    border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500;
+  }
+  button:hover { background: #2ea043; }
+  button.secondary {
+    background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+  }
+  button.secondary:hover { background: #30363d; }
+  button.danger {
+    background: #21262d; border: 1px solid #f85149; color: #f85149;
+  }
+  button.danger:hover { background: #2d0a0a; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Health */
+  .health-banner {
+    background: #0d1117; border-left: 4px solid #58a6ff;
+    border-radius: 0 6px 6px 0; padding: 10px 14px;
+    margin-bottom: 12px;
+  }
+  .health-banner.ok { border-left-color: #7ee787; }
+  .health-banner.warn { border-left-color: #f1c40f; }
+  .health-banner.err { border-left-color: #f85149; }
+  .health-title {
+    font-weight: 700; font-family: 'SF Mono', Consolas, monospace;
+    font-size: 13px; margin-bottom: 4px;
+  }
+  .health-title.ok { color: #7ee787; }
+  .health-title.warn { color: #f1c40f; }
+  .health-title.err { color: #f85149; }
+  .health-detail { font-size: 12px; color: #c9d1d9; }
+
+  /* Trace */
+  .trace {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: 12px; font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px; max-height: 380px; overflow-y: auto;
+  }
+  .trace-line {
+    padding: 5px 0; border-bottom: 1px dashed #21262d;
+    color: #c9d1d9; line-height: 1.5;
+  }
+  .trace-line:last-child { border-bottom: none; }
+  .trace-line .step { color: #58a6ff; font-weight: 600; }
+  .trace-line .hl { color: #f1c40f; }
+  .trace-line .ok { color: #7ee787; }
+  .trace-line .err { color: #f85149; }
+  .trace-line .data { color: #58a6ff; font-weight: 700; }
+  .trace-line .parity { color: #d2a8ff; font-weight: 700; }
+  .trace-empty {
+    color: #8b949e; font-style: italic; text-align: center; padding: 20px;
+  }
+
+  /* Stats */
+  .stats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+    margin-bottom: 8px;
+  }
+  .stat {
+    background: #0d1117; padding: 8px; border-radius: 6px;
+    border: 1px solid #21262d; text-align: center;
+  }
+  .stat .label {
+    font-size: 9px; color: #8b949e; text-transform: uppercase;
+  }
+  .stat .value {
+    font-size: 18px; font-weight: 700; color: #c9d1d9;
+    font-family: 'SF Mono', Consolas, monospace; margin-top: 2px;
+  }
+  .stat .value.good { color: #7ee787; }
+  .stat .value.warn { color: #f1c40f; }
+  .stat .value.bad { color: #f85149; }
+
+  .legend {
+    display: flex; gap: 12px; font-size: 11px; color: #8b949e;
+    flex-wrap: wrap; margin-top: 8px;
+  }
+  .legend-box {
+    width: 14px; height: 14px; border-radius: 3px; border: 2px solid;
+    margin-right: 4px; vertical-align: middle; display: inline-block;
+  }
+  .legend-box.data { border-color: #58a6ff; background: #0a1e3d; }
+  .legend-box.parity { border-color: #d2a8ff; background: #1f1428; }
+  .legend-box.local { border-color: #f1c40f; background: #1f1a07; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>🧩 Erasure Coding — The NYAN Example, Live</h1>
+  <p class="subtitle">Watch object <code style="color:#f1c40f">NYAN</code> get split into chunks, encoded with parity, distributed across OSDs. Then fail OSDs and see the algorithm rebuild from any K surviving chunks.</p>
+
+  <!-- Profile selector -->
+  <div class="panel">
+    <div class="panel-title">
+      <span>⚙️ Erasure Code Profile</span>
+      <span class="hint">From the IBM docs supported profiles + LRC variant</span>
+    </div>
+    <div class="profile-grid">
+      <div class="profile active" data-prof="4,2,jerasure" onclick="setProfile(4,2,'jerasure')">
+        <div class="name">jerasure</div>
+        <div class="params">K=4, M=2</div>
+        <div class="info">6 chunks · 1.5× · survives 2</div>
+      </div>
+      <div class="profile" data-prof="8,3,jerasure" onclick="setProfile(8,3,'jerasure')">
+        <div class="name">jerasure</div>
+        <div class="params">K=8, M=3</div>
+        <div class="info">11 chunks · 1.375× · survives 3</div>
+      </div>
+      <div class="profile" data-prof="8,4,jerasure" onclick="setProfile(8,4,'jerasure')">
+        <div class="name">jerasure</div>
+        <div class="params">K=8, M=4</div>
+        <div class="info">12 chunks · 1.5× · survives 4</div>
+      </div>
+      <div class="profile" data-prof="4,2,lrc" onclick="setProfile(4,2,'lrc')">
+        <div class="name">lrc</div>
+        <div class="params">K=4, M=2, L=3</div>
+        <div class="info">8 chunks · faster repair</div>
+      </div>
+    </div>
+    <div class="input-row">
+      <div class="input-group">
+        <label>Object name</label>
+        <input type="text" id="obj-name" value="NYAN">
+      </div>
+      <div class="input-group">
+        <label>Object content (K=4 → 12 chars; K=8 → 24 chars)</label>
+        <input type="text" id="obj-content" value="ABCDEFGHIJKL">
+      </div>
+      <button onclick="encode()">▶ Encode & Distribute</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- LEFT: Visualization -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">
+          <span>🎬 Encoding Flow</span>
+          <span class="hint" id="profile-label">jerasure k=4 m=2 — 6 chunks total</span>
+        </div>
+
+        <div class="encoding-flow">
+          <div class="original-content">
+            <div class="content-label">Object: <span id="enc-obj-name" style="color:#f1c40f;">NYAN</span> · payload (<span id="enc-len">12</span> bytes)</div>
+            <div class="content-value" id="enc-content">ABCDEFGHIJKL</div>
+          </div>
+
+          <div class="arrow-down">↓</div>
+          <div class="split-step" id="split-step">Split into K=4 data chunks (3 bytes each)</div>
+
+          <div class="chunks-row" id="data-chunks-row"></div>
+
+          <div class="arrow-down">↓</div>
+          <div class="split-step" id="parity-step">Reed-Solomon computes M=2 parity chunks</div>
+
+          <div class="chunks-row" id="all-chunks-row"></div>
+        </div>
+
+        <div class="health-banner" id="health">
+          <div class="health-title ok">HEALTHY</div>
+          <div class="health-detail">All chunks present. Object reads use only K data chunks.</div>
+        </div>
+
+        <div class="panel-title">
+          <span>💾 Acting Set — chunks distributed to OSDs</span>
+          <span class="hint">Click an OSD to fail/restore it</span>
+        </div>
+        <div id="osd-cluster"></div>
+
+        <div class="legend">
+          <div><span class="legend-box data"></span>Data chunk</div>
+          <div><span class="legend-box parity"></span>Parity (global)</div>
+          <div><span class="legend-box local"></span>LRC local parity</div>
+        </div>
+
+        <div class="actions">
+          <button onclick="simulateRead()">📖 Simulate Read</button>
+          <button class="danger" onclick="failRandom()">⚡ Fail random OSD</button>
+          <button class="danger" onclick="failTwo()">⚡⚡ Fail 2 random</button>
+          <button class="secondary" onclick="restoreAll()">↻ Restore all</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Stats + trace -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">📊 Health</div>
+        <div class="stats">
+          <div class="stat">
+            <div class="label">Up</div>
+            <div class="value good" id="s-up">—</div>
+          </div>
+          <div class="stat">
+            <div class="label">Down</div>
+            <div class="value" id="s-down">—</div>
+          </div>
+          <div class="stat">
+            <div class="label">Can recover?</div>
+            <div class="value" id="s-recover">—</div>
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #8b949e; margin-top: 4px;">
+          Need at least <span id="need-k" style="color:#58a6ff; font-weight:700;">K=4</span> surviving chunks to reconstruct the object.
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">📜 Operation Trace</div>
+        <div class="trace" id="trace">
+          <div class="trace-empty">Click "Encode & Distribute" or "Simulate Read" to see the EC math in action.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============ State ============
+let profile = { k: 4, m: 2, plugin: 'jerasure', L: null };
+let object = { name: 'NYAN', content: 'ABCDEFGHIJKL' };
+let chunks = []; // [{rank, value, type: 'data'|'parity'|'local', osdId, failed}]
+let osds = [];
+
+// ============ Pseudo-RS encoding ============
+// We fake parity chunks for visualization. Real Reed-Solomon uses Galois fields;
+// what matters here is showing that chunks exist and have a position.
+function computeParity(dataChunks, index, length) {
+  // Generate deterministic pseudo-parity from data chunks
+  let str = '';
+  for (let i = 0; i < length; i++) {
+    let code = 0;
+    dataChunks.forEach((c, dIdx) => {
+      code ^= (c.charCodeAt(i % c.length) + (index + 1) * (dIdx + 1)) & 0xFF;
+    });
+    // Map to printable A-Z
+    str += String.fromCharCode(65 + (code % 26));
+  }
+  return str;
+}
+
+function setProfile(k, m, plugin) {
+  profile.k = k;
+  profile.m = m;
+  profile.plugin = plugin;
+  profile.L = plugin === 'lrc' ? 3 : null;
+  document.querySelectorAll('.profile').forEach(el => {
+    el.classList.remove('active');
+  });
+  document.querySelector(`[data-prof="${k},${m},${plugin}"]`)?.classList.add('active');
+
+  // Update example content for the profile
+  if (k === 4) {
+    document.getElementById('obj-content').value = 'ABCDEFGHIJKL';
+  } else if (k === 8) {
+    document.getElementById('obj-content').value = 'ABCDEFGHIJKLMNOPQRSTUVWX';
+  }
+  updateProfileLabel();
+  encode();
+}
+
+function updateProfileLabel() {
+  const total = profile.k + profile.m + (profile.L ? Math.ceil((profile.k + profile.m) / profile.L) : 0);
+  let label = `${profile.plugin} k=${profile.k} m=${profile.m}`;
+  if (profile.L) label += ` L=${profile.L}`;
+  label += ` — ${total} chunks total`;
+  document.getElementById('profile-label').textContent = label;
+  document.getElementById('need-k').textContent = `K=${profile.k}`;
+}
+
+// ============ Encode ============
+function encode() {
+  clearTrace();
+  const objName = document.getElementById('obj-name').value.trim() || 'NYAN';
+  let content = document.getElementById('obj-content').value;
+  object.name = objName;
+  object.content = content;
+
+  // Pad to multiple of K
+  const k = profile.k;
+  const padded = content.length % k === 0
+    ? content
+    : content + '_'.repeat(k - (content.length % k));
+  const chunkSize = padded.length / k;
+
+  const data = [];
+  for (let i = 0; i < k; i++) {
+    data.push(padded.slice(i * chunkSize, (i + 1) * chunkSize));
+  }
+
+  // Compute parities
+  const parities = [];
+  for (let i = 0; i < profile.m; i++) {
+    parities.push(computeParity(data, i, chunkSize));
+  }
+
+  // Build chunks list
+  chunks = [];
+  data.forEach((d, i) => chunks.push({ rank: i, value: d, type: 'data' }));
+  parities.forEach((p, i) => chunks.push({ rank: k + i, value: p, type: 'parity' }));
+
+  // For LRC, add local parities
+  if (profile.plugin === 'lrc') {
+    const allBase = [...data, ...parities];
+    const numLocal = Math.ceil(allBase.length / profile.L);
+    for (let i = 0; i < numLocal; i++) {
+      const group = allBase.slice(i * profile.L, (i + 1) * profile.L);
+      chunks.push({
+        rank: chunks.length,
+        value: computeParity(group, 100 + i, chunkSize),
+        type: 'local',
+        groupIdx: i,
+      });
+    }
+    // Also tag base chunks with their group
+    allBase.forEach((_, idx) => {
+      chunks[idx].groupIdx = Math.floor(idx / profile.L);
+    });
+  }
+
+  // Assign each chunk to a different OSD
+  const osdIds = [5, 4, 3, 2, 1, 0, 6, 7, 8, 9, 10, 11, 12, 13]; // match doc style
+  chunks.forEach((c, i) => { c.osdId = osdIds[i] || (20 + i); });
+
+  // Build OSD list
+  osds = chunks.map(c => ({ id: c.osdId, chunkRank: c.rank, failed: false }));
+
+  renderEncoding(padded, content, chunkSize);
+  renderOSDs();
+  updateHealth();
+
+  // Trace
+  addTrace(`<span class="step">[1]</span> Object <span class="hl">${objName}</span> (${content.length} bytes) → pool with EC profile <span class="hl">${profile.plugin} k=${profile.k}, m=${profile.m}${profile.L ? ', L=' + profile.L : ''}</span>`);
+  if (content.length !== padded.length) {
+    addTrace(`<span class="step">[2]</span> Content padded: <span class="hl">"${content}"</span> → <span class="hl">"${padded}"</span> (added ${padded.length - content.length} char(s) to reach multiple of K=${k})`);
+  } else {
+    addTrace(`<span class="step">[2]</span> Content length (${content.length}) is multiple of K=${k} — no padding needed.`);
+  }
+  addTrace(`<span class="step">[3]</span> Split into <span class="data">${k} data chunks</span>: ` +
+    data.map((d, i) => `[${i}]"${d}"`).join(', '));
+  addTrace(`<span class="step">[4]</span> Reed-Solomon computes <span class="parity">${profile.m} parity chunks</span>: ` +
+    parities.map((p, i) => `[${k + i}]"${p}"`).join(', '));
+  if (profile.plugin === 'lrc') {
+    const localCount = chunks.filter(c => c.type === 'local').length;
+    addTrace(`<span class="step">[5]</span> LRC adds <span style="color:#f1c40f;">${localCount} local parity chunks</span> for fast single-chunk repair.`);
+  }
+  addTrace(`<span class="step">[${profile.plugin === 'lrc' ? '6' : '5'}]</span> Primary OSD distributes all ${chunks.length} chunks to ${chunks.length} OSDs in the acting set. ` +
+    `Each chunk stored with <code>shard_id</code> xattr = chunk rank.`);
+}
+
+function renderEncoding(padded, original, chunkSize) {
+  // Original content with padding indicator
+  document.getElementById('enc-obj-name').textContent = object.name;
+  const contentEl = document.getElementById('enc-content');
+  const padding = padded.slice(original.length);
+  contentEl.innerHTML = original + (padding ? `<span class="padding">${padding}</span>` : '');
+  document.getElementById('enc-len').textContent = original.length;
+
+  // Split label
+  document.getElementById('split-step').textContent =
+    `Split into K=${profile.k} data chunks (${chunkSize} bytes each)`;
+  document.getElementById('parity-step').innerHTML = profile.plugin === 'lrc'
+    ? `Reed-Solomon adds M=${profile.m} global parity + ${chunks.filter(c=>c.type==='local').length} <span style="color:#f1c40f">LRC local parity</span> chunks`
+    : `Reed-Solomon computes M=${profile.m} parity chunks`;
+
+  // Data chunks row
+  const dataRow = document.getElementById('data-chunks-row');
+  dataRow.style.gridTemplateColumns = `repeat(${profile.k}, 1fr)`;
+  dataRow.innerHTML = chunks.filter(c => c.type === 'data').map(c => `
+    <div class="chunk data">
+      <div class="chunk-rank">chunk ${c.rank + 1} (rank ${c.rank})</div>
+      <div class="chunk-value">${c.value}</div>
+      <div class="chunk-type">data</div>
+    </div>
+  `).join('');
+
+  // All chunks row
+  const allRow = document.getElementById('all-chunks-row');
+  allRow.style.gridTemplateColumns = `repeat(${chunks.length}, 1fr)`;
+  allRow.innerHTML = chunks.map(c => `
+    <div class="chunk ${c.type}">
+      <div class="chunk-rank">chunk ${c.rank + 1}</div>
+      <div class="chunk-value">${c.value}</div>
+      <div class="chunk-type">${c.type === 'data' ? 'data' : (c.type === 'local' ? 'local parity' : 'parity')}</div>
+    </div>
+  `).join('');
+}
+
+function renderOSDs() {
+  const container = document.getElementById('osd-cluster');
+
+  if (profile.plugin === 'lrc') {
+    // Group OSDs by locality group
+    const groups = {};
+    chunks.forEach((c, i) => {
+      const g = c.groupIdx !== undefined ? c.groupIdx : 'local-parity';
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(i);
+    });
+
+    container.innerHTML = '';
+    Object.entries(groups).forEach(([g, indices]) => {
+      const groupDiv = document.createElement('div');
+      groupDiv.className = 'locality-group';
+      groupDiv.setAttribute('data-label', g === 'local-parity' ? 'local parities' : `group ${g}`);
+      groupDiv.innerHTML = `<div class="osd-cluster">${indices.map(i => osdHTML(i)).join('')}</div>`;
+      container.appendChild(groupDiv);
+    });
+  } else {
+    container.className = '';
+    container.innerHTML = `<div class="osd-cluster">${osds.map((_, i) => osdHTML(i)).join('')}</div>`;
+  }
+}
+
+function osdHTML(i) {
+  const osd = osds[i];
+  const c = chunks[i];
+  return `
+    <div class="osd ${osd.failed ? 'failed' : ''}" data-idx="${i}" onclick="toggleOSD(${i})">
+      <div class="osd-name">osd.${osd.id}</div>
+      <div class="osd-chunk ${c.type}">
+        <div class="label">chunk #${c.rank + 1}</div>
+        <div class="val">${c.value}</div>
+      </div>
+      <div class="osd-status ${osd.failed ? 'down' : 'up'}">${osd.failed ? '⚡ DOWN' : '● up'}</div>
+    </div>
+  `;
+}
+
+function toggleOSD(i) {
+  osds[i].failed = !osds[i].failed;
+  renderOSDs();
+  updateHealth();
+}
+
+function failRandom() {
+  const up = osds.map((o, i) => i).filter(i => !osds[i].failed);
+  if (up.length === 0) return;
+  const t = up[Math.floor(Math.random() * up.length)];
+  osds[t].failed = true;
+  renderOSDs();
+  updateHealth();
+  addTrace(`<span class="err">⚡ osd.${osds[t].id} marked DOWN</span> (chunk ${chunks[t].rank + 1} = "${chunks[t].value}", ${chunks[t].type})`);
+}
+
+function failTwo() {
+  failRandom();
+  setTimeout(failRandom, 100);
+}
+
+function restoreAll() {
+  osds.forEach(o => o.failed = false);
+  renderOSDs();
+  updateHealth();
+  addTrace(`<span class="ok">↻ All OSDs restored.</span>`);
+}
+
+function updateHealth() {
+  // Count surviving data + parity (not LRC local for global recovery)
+  const up = osds.filter(o => !o.failed).length;
+  const down = osds.length - up;
+
+  // For global recovery, we need K chunks of any type (excluding LRC locals as separate)
+  const upBase = chunks.filter((c, i) => !osds[i].failed && c.type !== 'local').length;
+  const canRecover = upBase >= profile.k;
+
+  document.getElementById('s-up').textContent = up;
+  document.getElementById('s-down').textContent = down;
+  const recoverEl = document.getElementById('s-recover');
+  recoverEl.textContent = canRecover ? 'YES' : 'NO';
+  recoverEl.className = 'value ' + (canRecover ? 'good' : 'bad');
+
+  const banner = document.getElementById('health');
+  const title = banner.querySelector('.health-title');
+  const detail = banner.querySelector('.health-detail');
+
+  if (down === 0) {
+    banner.className = 'health-banner ok';
+    title.className = 'health-title ok';
+    title.textContent = 'HEALTHY';
+    detail.textContent = `All ${osds.length} chunks present. Reads use the ${profile.k} data chunks directly — no reconstruction.`;
+  } else if (canRecover) {
+    banner.className = 'health-banner warn';
+    title.className = 'health-title warn';
+    title.textContent = 'DEGRADED — RECOVERABLE';
+    const missing = chunks.filter((c, i) => osds[i].failed && c.type !== 'local').map(c => c.rank + 1).join(', ');
+    detail.innerHTML = `${down} chunk(s) missing (#${missing}). Have <strong>${upBase} ≥ K=${profile.k}</strong> surviving — algorithm can reconstruct. Click "Simulate Read" to watch.`;
+  } else {
+    banner.className = 'health-banner err';
+    title.className = 'health-title err';
+    title.textContent = 'UNRECOVERABLE';
+    detail.innerHTML = `Only <strong>${upBase} surviving chunks &lt; K=${profile.k}</strong>. Object cannot be read until enough OSDs return.`;
+  }
+}
+
+// ============ Read simulation ============
+async function simulateRead() {
+  const surviving = chunks.map((c, i) => ({ c, i })).filter(x => !osds[x.i].failed && x.c.type !== 'local');
+  const missing = chunks.map((c, i) => ({ c, i })).filter(x => osds[x.i].failed && x.c.type !== 'local');
+
+  if (surviving.length < profile.k) {
+    addTrace(`<span class="err">⚠ READ FAILED — only ${surviving.length} chunks available, need ${profile.k}.</span>`);
+    return;
+  }
+
+  addTrace(`<span class="step">[R1]</span> Client requests <span class="hl">${object.name}</span>. Primary OSD attempts to read all ${chunks.filter(c => c.type !== 'local').length} non-local chunks.`);
+  await sleep(600);
+
+  if (missing.length === 0) {
+    addTrace(`<span class="step">[R2]</span> All chunks present. Primary reads <span class="data">K=${profile.k} data chunks</span> and concatenates — no parity work needed.`);
+    // Highlight K data chunks
+    chunks.filter(c => c.type === 'data').forEach((c, i) => {
+      const idx = chunks.indexOf(c);
+      const el = document.querySelector(`[data-idx="${idx}"]`);
+      if (el) el.classList.add('reading');
+    });
+    await sleep(800);
+    addTrace(`<span class="step">[R3]</span> <span class="ok">✓ Reconstructed:</span> ${chunks.filter(c => c.type === 'data').map(c => c.value).join('') }`);
+    document.querySelectorAll('.osd').forEach(e => e.classList.remove('reading'));
+    return;
+  }
+
+  addTrace(`<span class="step">[R2]</span> <span class="err">Missing ${missing.length} chunk(s):</span> ` +
+    missing.map(x => `chunk ${x.c.rank + 1} ("${x.c.value}", ${x.c.type}) on osd.${osds[x.i].id}`).join(', '));
+  await sleep(700);
+
+  // Highlight K surviving chunks used for reconstruction
+  const useForRebuild = surviving.slice(0, profile.k);
+  addTrace(`<span class="step">[R3]</span> Algorithm needs only ${profile.k} surviving chunks. Reading: ` +
+    useForRebuild.map(x => `<span class="${x.c.type === 'data' ? 'data' : 'parity'}">chunk ${x.c.rank + 1}</span>`).join(', '));
+  useForRebuild.forEach(x => {
+    const el = document.querySelector(`[data-idx="${x.i}"]`);
+    if (el) el.classList.add('reading');
+  });
+  await sleep(900);
+
+  // Reconstruct
+  const dataChunks = chunks.filter(c => c.type === 'data').sort((a, b) => a.rank - b.rank);
+  const original = dataChunks.map(c => c.value).join('');
+  addTrace(`<span class="step">[R4]</span> Reed-Solomon decode: solves linear system over Galois field GF(2^8). ` +
+    `<span class="ok">Reconstructs missing data chunks</span> from surviving K=${profile.k} chunks.`);
+  await sleep(800);
+
+  // Show reconstructed chunks as green
+  missing.forEach(x => {
+    const el = document.querySelector(`[data-idx="${x.i}"]`);
+    if (el) {
+      el.classList.add('reconstructed');
+    }
+  });
+
+  addTrace(`<span class="step">[R5]</span> <span class="ok">✓ Object reconstructed:</span> <span class="hl">"${original.replace(/_/g, '')}"</span>`);
+  if (profile.plugin === 'lrc' && missing.length === 1) {
+    addTrace(`<span class="hl">Note (LRC):</span> If this were the only failure, LRC could rebuild using just ${profile.L} chunks from the local group — much less I/O than reading K=${profile.k} chunks!`);
+  }
+
+  setTimeout(() => {
+    document.querySelectorAll('.osd').forEach(e => {
+      e.classList.remove('reading', 'reconstructed');
+    });
+  }, 2000);
+}
+
+function addTrace(html) {
+  const t = document.getElementById('trace');
+  if (t.querySelector('.trace-empty')) t.innerHTML = '';
+  const line = document.createElement('div');
+  line.className = 'trace-line';
+  line.innerHTML = html;
+  t.appendChild(line);
+  t.scrollTop = t.scrollHeight;
+}
+
+function clearTrace() {
+  document.getElementById('trace').innerHTML = '';
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Init
+updateProfileLabel();
+encode();
+</script>
+</body>
+</html>
